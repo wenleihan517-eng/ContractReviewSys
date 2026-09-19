@@ -211,7 +211,11 @@ class VectorEngine:
             clauses=clauses,
             vectors=vectors,
             collection=settings.MILVUS_COLLECTION_STANDARD_CLAUSE,
-            output_fields=["clause_title", "clause_text", "clause_type"],
+            # 【字段对齐说明】标准条款库集合与条款/规则集合共用同一套 schema
+            # （contract_id / clause_id / clause_type / content / embedding），
+            # 此处必须用 content（条款正文），而非 clause_title/clause_text
+            # —— 后两者不在 schema 中，检索会报 field not exist。
+            output_fields=["clause_id", "clause_type", "content"],
             candidate_kind="standard_clause",
         )
 
@@ -344,12 +348,14 @@ class VectorEngine:
                 f"{similarity:.4f}），疑似存在相关风险，建议交规则引擎复核"
             )
         else:
-            # 标准条款库：clause_title / clause_text 为标准条款内容
+            # 标准条款库：content 即标准条款正文（与集合 schema 对齐）
             prefix = "S"
-            matched_title = str(entity.get("clause_title", ""))
+            content_text = str(entity.get("content", ""))
+            matched_title = content_text[:50] or "未命名标准条款"
             suggestion = (
-                f"该条款与标准条款《{matched_title or '未命名'}》存在差异"
-                f"（相似度={similarity:.4f}），建议对照标准文本核查"
+                f"该条款与标准条款《{matched_title}》存在差异"
+                f"（相似度={similarity:.4f}），建议对照标准文本核查；"
+                f"标准条款参考：{content_text[:200]}"
             )
 
         return VectorCandidate(

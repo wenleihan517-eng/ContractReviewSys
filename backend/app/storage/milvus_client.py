@@ -218,9 +218,13 @@ class MilvusClientManager:
         创建业务所需集合（幂等）
 
         说明：
-            当前创建两类集合：
-                1. cr_clauses        — 条款向量（用于相似条款召回、重复条款检测）
-                2. cr_rule_templates — 规则模板向量（用于语义规则匹配召回）
+            当前创建三类集合：
+                1. cr_clauses              — 条款向量（相似条款召回、重复条款检测）
+                2. cr_standard_clause_lib  — 标准条款库向量（推荐条款检索数据源）
+                3. cr_rule_templates       — 规则模板向量（语义规则匹配召回）
+            【2026-09-19 修复】此前 collection_plan 漏配 standard_clause_lib，
+            导致 vector_review 节点检索时 MilvusException(code=100 collection not found)，
+            全部任务在向量召回阶段重试耗尽后阻塞。
             集合不存在时创建，已存在则跳过。
             建成后自动加载（load）到内存，保证检索可用。
 
@@ -234,6 +238,7 @@ class MilvusClientManager:
 
         collection_plan: Dict[str, str] = {
             settings.MILVUS_COLLECTION_CLAUSE: "条款向量集合，存放条款文本的 BGE-M3 向量",
+            settings.MILVUS_COLLECTION_STANDARD_CLAUSE: "标准条款库向量集合，条款推荐数据源",
             settings.MILVUS_COLLECTION_RULE_TEMPLATE: "规则模板向量集合，存放规则描述的向量",
         }
 

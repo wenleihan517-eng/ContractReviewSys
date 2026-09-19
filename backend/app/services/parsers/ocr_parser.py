@@ -125,9 +125,23 @@ def is_ocr_engine_available() -> Tuple[bool, str]:
         # 测试与联调专用：不依赖任何外部引擎
         return True, "mock 引擎（仅用于测试，不产生真实识别结果）"
 
+    if engine_name == "online":
+        # 在线 OCR：可用性 = 三项配置齐备（真实连通性在识别时校验，
+        # 此处不做网络探测，避免每次解析前的快速判断被网络抖动拖慢）
+        base_url = (settings.OCR_ONLINE_BASE_URL or "").strip()
+        api_key = (settings.OCR_ONLINE_API_KEY or "").strip()
+        model = (settings.OCR_ONLINE_MODEL or "").strip()
+        if base_url and api_key and model:
+            return True, f"在线 OCR 已配置（模型：{model}）"
+        return False, (
+            "在线 OCR 配置不完整。请在 .env 中设置 OCR_ONLINE_BASE_URL / "
+            "OCR_ONLINE_API_KEY / OCR_ONLINE_MODEL（如 qwen-vl-plus），"
+            "并将 OCR_ENGINE 设为 online"
+        )
+
     return False, (
         f"不支持的 OCR 引擎：{settings.OCR_ENGINE}。"
-        f"可选值：paddleocr / tesseract / mock"
+        f"可选值：paddleocr / tesseract / online / mock"
     )
 
 
@@ -192,6 +206,27 @@ def _get_engine() -> Any:
         # mock 引擎不产生真实识别结果，仅用于链路联通性测试
         _engine_cache[engine_name] = object()
         logger.warning("OCR 使用 mock 引擎，识别结果为占位数据，禁止用于生产")
+        return _engine_cache[engine_name]
+
+    if engine_name == "online":
+        # 在线 OCR：调用 OpenAI 兼容的视觉多模态模型（如 qwen-vl 系列）。
+        # 无本地模型依赖，可用性取决于三项配置是否齐备 + 服务可达。
+        base_url = (settings.OCR_ONLINE_BASE_URL or "").strip()
+        api_key = (settings.OCR_ONLINE_API_KEY or "").strip()
+        model = (settings.OCR_ONLINE_MODEL or "").strip()
+        if not base_url or not api_key or not model:
+            return False, (
+                "在线 OCR 配置不完整。请在 .env 中设置："
+                "OCR_ONLINE_BASE_URL（OpenAI 兼容接口地址）、"
+                "OCR_ONLINE_API_KEY（服务密钥）、OCR_ONLINE_MODEL（视觉模型名，"
+                "如 qwen-vl-plus），并将 OCR_ENGINE 设为 online"
+            )
+        _engine_cache[engine_name] = {
+            "base_url": base_url.rstrip("/"),
+            "api_key": api_key,
+            "model": model,
+        }
+        logger.info("在线 OCR 引擎配置就绪 | 模型=%s", model)
         return _engine_cache[engine_name]
 
     raise OCRUnavailableError(f"不支持的 OCR 引擎：{settings.OCR_ENGINE}")
@@ -461,6 +496,138 @@ def _recognize_mock(
     return [(text, confidence, (0.0, 0.0, 100.0, 20.0))]
 
 
+def _recognize_online(
+    engine: Dict[str, str],
+    image_bytes: bytes,
+) -> List[Tuple[str, float, Tuple[float, float, float, float]]]:
+    """
+    使用在线视觉多模态模型识别单张图像（OpenAI 兼容 chat/completions 协议）
+
+    【工作方式】
+        把图像编码为 base64 data URL，连同提示词一起发给视觉模型
+        （如 qwen-vl-plus / qwen-vl-max / gpt-4o 等任意 OpenAI 兼容端点），
+        要求模型逐行输出图中全部文字。
+
+    【置信度与坐标的说明（务必知悉）】
+        在线视觉模型不返回行级置信度与文字坐标：
+            · 置信度：使用固定占位值 OCR_ONLINE_LINE_CONFIDENCE（默认 0.95），
+              语义是"模型能清晰读出"。该值必须高于 OCR_MIN_CONFIDENCE_THRESHOLD，
+              否则所有扫描件都会被误判模糊阻断；
+            · 坐标：无法提供真实 bbox，按输出行序构造伪坐标 (0, i*行高, 0, 行高)，
+              仅用于下游按阅读顺序排序；文本块与风险定位依赖的是
+              字符偏移量坐标系（start_idx/end_idx），不受伪坐标影响。
+
+    参数：
+        engine: _get_engine() 返回的配置字典（base_url / api_key / model）
+        image_bytes: 图像字节内容
+
+    返回：
+        [(识别文本, 置信度, bbox), ...]
+
+    异常：
+        OCREngineError：请求失败 / 响应结构异常 / 模型拒绝输出时
+    """
+    import base64
+    import json as _json
+
+    import httpx
+
+    base_url = engine["base_url"]
+    api_key = engine["api_key"]
+    model = engine["model"]
+
+    # ---------------- 图像编码 ----------------
+    # 通过文件头魔数判断 MIME，避免依赖文件扩展名（MinIO 对象键不含扩展名场景）
+    if image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        mime = "image/png"
+    elif image_bytes[:3] == b"\xff\xd8\xff":
+        mime = "image/jpeg"
+    elif image_bytes[:4] in (b"II*\x00", b"MM\x00*"):
+        mime = "image/tiff"
+    elif image_bytes[:2] == b"BM":
+        mime = "image/bmp"
+    else:
+        mime = "image/png"  # 兜底：多数服务默认支持 PNG/JPEG
+
+    data_url = (
+        f"data:{mime};base64,"
+        + base64.b64encode(image_bytes).decode("ascii")
+    )
+
+    prompt = (
+        "你是合同文档 OCR 引擎。请逐行输出图片中出现的全部文字，"
+        "要求：1) 保持原文的行顺序与内容，不要合并、不要改写；"
+        "2) 只输出文字本身，不要任何解释、标注、序号或 Markdown 格式；"
+        "3) 无法辨认的字符用 □ 占位；4) 表格按行输出，单元格之间用两个空格分隔。"
+    )
+
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "temperature": 0.0,
+        "max_tokens": 4096,
+    }
+
+    timeout = float(settings.OCR_PAGE_TIMEOUT_SECONDS or 60.0)
+
+    # ---------------- 请求 ----------------
+    try:
+        resp = httpx.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=httpx.Timeout(timeout, connect=10.0),
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise OCREngineError(
+            f"在线 OCR 服务返回错误：HTTP {exc.response.status_code}",
+            {"status": exc.response.status_code, "body": exc.response.text[:300]},
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - 网络/超时等统一转领域异常
+        raise OCREngineError(
+            f"在线 OCR 请求失败：{exc}", {"error": str(exc)}
+        ) from exc
+
+    # ---------------- 响应解析 ----------------
+    try:
+        content = body["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise OCREngineError(
+            "在线 OCR 响应结构异常，未找到 choices[0].message.content",
+            {"body": _json.dumps(body, ensure_ascii=False)[:300]},
+        ) from exc
+
+    if not isinstance(content, str) or not content.strip():
+        return []
+
+    confidence = float(settings.OCR_ONLINE_LINE_CONFIDENCE)
+    items: List[Tuple[str, float, Tuple[float, float, float, float]]] = []
+    line_height = 24.0
+    line_no = 0
+    for raw_line in content.splitlines():
+        text = raw_line.strip()
+        if not text:
+            continue
+        y0 = line_no * line_height
+        items.append((text, confidence, (0.0, y0, 0.0, y0 + line_height)))
+        line_no += 1
+
+    return items
+
+
 def recognize_image(
     image_bytes: bytes,
     page_no: int = 1,
@@ -490,6 +657,8 @@ def recognize_image(
         return _recognize_paddleocr(engine, image_bytes)
     if engine_name == "tesseract":
         return _recognize_tesseract(engine, image_bytes)
+    if engine_name == "online":
+        return _recognize_online(engine, image_bytes)
     if engine_name == "mock":
         return _recognize_mock(engine, image_bytes)
 

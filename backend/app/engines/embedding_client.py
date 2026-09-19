@@ -68,6 +68,11 @@ class EmbeddingClient:
             ),
             headers={"Content-Type": "application/json"},
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            # 【关键】内网/本机向量化服务不走系统代理：
+            # httpx 默认 trust_env=True 会读取 HTTP_PROXY 等环境变量，
+            # 本机若存在 HTTP 代理，会劫持 127.0.0.1 请求导致
+            # "向量化服务调用失败"（实测代理拦截后重试 3 次、每次数十秒）。
+            trust_env=False,
         )
         logger.info(
             "向量化客户端初始化完成 | 地址=%s | 模型=%s | 维度=%d",
@@ -357,14 +362,24 @@ class EmbeddingClient:
         """
         检查向量化服务连通性
 
-        说明：请求 /models 接口探测服务可用性。
+        说明：
+            用一次最小 embeddings 请求探测（而非 /models）。
+            部分推理服务实现（如本环境的 Infinity 部署）未提供
+            /models 端点（GET 返回 404），但 /embeddings 工作正常；
+            以业务真正依赖的端点做探活才不会误报。
 
         返回：
             True 表示连通，False 表示不可达
         """
         try:
             client = self._require_client()
-            response = await client.get("/models")
+            response = await client.post(
+                "/embeddings",
+                json={
+                    "model": settings.EMBEDDING_MODEL_NAME,
+                    "input": "healthcheck",
+                },
+            )
             return response.status_code == 200
         except Exception as exc:  # noqa: BLE001 - 健康检查需吞掉全部异常
             logger.error(

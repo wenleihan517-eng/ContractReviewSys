@@ -30,10 +30,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import httpx
 
@@ -43,6 +44,70 @@ from app.core.logging_config import get_logger
 from app.core.exceptions import BusinessException, ErrorCode
 
 logger = get_logger(__name__)
+
+# ----------------------------------------------------------------------
+# 自动审查调度（上传即审链路）
+# ----------------------------------------------------------------------
+# 说明：前端"上传合同送审"只触发到解析；若无人再调审查触发接口，
+#   任务会永久停留在 RUNNING（前端表现为"审查中 0%"长期不动）。
+#   因此解析成功后由此处自动调度后台审查，形成"上传→解析→审查"一条龙。
+#   用进程内集合做在飞去重，防止解析重试与手动触发并发导致同一任务重复跑图。
+_auto_review_inflight: Set[str] = set()
+
+
+def _schedule_auto_review(
+    task_id: str,
+    task_no: str,
+    object_key: str,
+    source_type: str,
+    file_name: str,
+) -> None:
+    """
+    调度后台自动审查（fire-and-forget）
+
+    说明：
+        审查走完整 LangGraph 图，LLM 辅助节点失败时会降级（不中断主流程），
+        但整图耗时可能达数十秒；为避免占用解析接口的响应时间，
+        采用后台任务执行，任务状态经 MongoDB 轮询对前端可见。
+
+    参数：
+        task_id: 任务 ID
+        task_no: 任务编号（日志用）
+        object_key: 合同对象键
+        source_type: digital / scanned
+        file_name: 原始文件名（标题兜底用）
+    """
+    if task_id in _auto_review_inflight:
+        logger.info("自动审查已在执行，跳过重复调度 | 任务=%s", task_no)
+        return
+    _auto_review_inflight.add(task_id)
+
+    async def _runner() -> None:
+        try:
+            outcome = await trigger_review(
+                task_id,
+                object_key=object_key,
+                source_type=source_type,
+                file_name=file_name,
+            )
+            logger.info(
+                "自动审查完成 | 任务=%s | accepted=%s | 状态=%s | message=%s",
+                task_no, outcome.accepted, outcome.status, outcome.message,
+            )
+        except Exception as exc:  # noqa: BLE001 - 后台任务必须自吞异常
+            logger.error(
+                "自动审查执行异常 | 任务=%s | 异常=%s", task_no, exc, exc_info=True
+            )
+        finally:
+            _auto_review_inflight.discard(task_id)
+
+    task = asyncio.create_task(_runner(), name=f"auto-review-{task_no}")
+    # 持有强引用，防止任务被垃圾回收中途取消（asyncio 官方建议做法）
+    _auto_review_tasks.add(task)
+
+
+# 后台任务强引用集合（仅防 GC，不参与业务判断）
+_auto_review_tasks: set = set()
 
 
 # ======================================================================
@@ -123,7 +188,9 @@ async def fetch_approval_context(task_no: str) -> Dict[str, Any]:
 
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout, connect=connect_timeout)
+            timeout=httpx.Timeout(timeout, connect=connect_timeout),
+            # 内网审批系统不走系统代理（避免本机代理劫持 127.0.0.1 请求）
+            trust_env=False,
         ) as client:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
@@ -167,37 +234,68 @@ def _build_initial_state(
     """
     from app.graph import ReviewTaskState
 
-    # -------------------- 字段取值：审批单优先，任务主档兜底 --------------------
+    # -------------------- 字段取值：审批单优先，自动识别兜底 --------------------
+    # 【兜底链（2026-09-19 上传免填表单改造）】
+    #   审批单上下文 > 解析产物自动识别（parse_snapshot.auto_metadata）> 文件名/占位
+    #   手动上传任务在审批系统中没有审批单，上下文为空字典；
+    #   此时以 metadata_extractor 从合同原文自动识别的字段兜底，
+    #   仍缺失的金额按 0 处理并在 notes 中备注（由后续识别推送补充），
+    #   不再因基础信息缺失而阻塞审查 —— 否则"上传即审"链路必然卡死。
+    snapshot = getattr(task, "parse_snapshot", None) or {}
+    auto_meta: Dict[str, Any] = snapshot.get("auto_metadata") or {}
+
     contract_title = (
         approval_ctx.get("contract_title")
         or approval_ctx.get("title")
         or ""
     ).strip()
-    contract_no = (
-        approval_ctx.get("contract_no") or task.task_no or ""
-    ).strip()
-    counterparty = (approval_ctx.get("counterparty") or "").strip()
-    contract_amount = float(approval_ctx.get("contract_amount") or 0.0)
-
-    # 合同标题缺失时用文件名兜底（演示场景常见：上传即触发，未填标题）
+    if not contract_title:
+        # 自动识别标题（解析后由系统回填，保证可追溯）
+        contract_title = (auto_meta.get("contract_title") or "").strip()
     if not contract_title and file_name:
         contract_title = file_name.rsplit(".", 1)[0]
 
-    # 相对方缺失时给出明确的占位，保证流程可继续（真实环境应要求审批单必填）
+    contract_no = (
+        approval_ctx.get("contract_no")
+        or (auto_meta.get("contract_no") or "").strip()
+        or task.task_no
+        or ""
+    ).strip()
+
+    counterparty = (approval_ctx.get("counterparty") or "").strip()
     if not counterparty:
-        counterparty = (approval_ctx.get("applicant") or "待补充相对方").strip()
+        # 自动识别乙方（相对方）；识别失败给明确占位，保证流程可继续
+        counterparty = (
+            auto_meta.get("party_b_name")
+            or approval_ctx.get("applicant")
+            or "待补充相对方"
+        ).strip()
+
+    # 金额取值链：审批单 > 自动识别（含中文大写解析）> 0（缺失备注，不阻塞）
+    raw_amount = approval_ctx.get("contract_amount")
+    if not raw_amount:
+        raw_amount = auto_meta.get("amount")
+    contract_amount = float(raw_amount or 0.0)
+
+    # 自动识别的备注信息（用于任务追溯：哪些字段是系统识别的）
+    auto_notes: List[str] = list(snapshot.get("auto_notes") or [])
 
     missing: List[str] = []
     if not contract_title:
         missing.append("contract_title（合同标题）")
     if not contract_no:
         missing.append("contract_no（合同编号）")
-    if contract_amount <= 0:
-        missing.append("contract_amount（合同金额）")
     if missing:
+        # 标题（文件名兜底）与编号（task_no 兜底）在正常链路下不可能同时缺失，
+        # 保留该防御分支以拦截结构性异常（如任务主档损坏）
         raise ValueError(
             "合同基础信息不完整，无法启动审查流程，缺失：" + "、".join(missing)
         )
+
+    if contract_amount <= 0:
+        # 金额缺失不阻塞：路由按 standard 处理（≥500 万深度复核不适用），
+        # 备注留痕，后续识别/审批单补充后可重跑
+        auto_notes.append("合同金额缺失，路由按 standard 处理；待审批单或自动识别补充")
 
     state = ReviewTaskState(
         # 任务标识
@@ -214,7 +312,7 @@ def _build_initial_state(
         applicant=(approval_ctx.get("applicant") or task.created_by or "").strip(),
         counterparty=counterparty,
         contract_amount=contract_amount,
-        currency=(approval_ctx.get("currency") or "CNY").strip(),
+        currency=(approval_ctx.get("currency") or auto_meta.get("currency") or "CNY").strip(),
         performance_period=(approval_ctx.get("performance_period") or "").strip(),
         business_type=(approval_ctx.get("business_type") or "").strip(),
         contract_type=(approval_ctx.get("contract_type") or "other").strip(),
@@ -225,6 +323,12 @@ def _build_initial_state(
         status=ReviewTaskStatus.RUNNING.value,
         route_type=task.route_type,
     )
+    # 自动识别备注：仅日志留痕（图状态为契约不随意加字段；
+    # 字段溯源已持久化在 parse_snapshot.auto_metadata 的 evidence 中）
+    if auto_notes:
+        logger.info(
+            "自动识别备注 | 任务=%s | %s", task.task_no, "；".join(auto_notes)
+        )
     return state
 
 
@@ -321,6 +425,38 @@ async def trigger_parse(
         elif isinstance(block, dict):
             snapshot_blocks.append(block)
 
+    # -------------------- 自动识别合同元数据（上传免填表单） --------------------
+    # 说明：metadata_extractor 全部字段"抽取失败即 None"，绝不猜测；
+    #   识别结果写入 parse_snapshot.auto_metadata（含 evidence 证据可追溯），
+    #   并把识别出的标题回填任务主档（前端列表即时可见），
+    #   合同类型同步给出基于关键词的轻量识别，供规则集路由参考。
+    from app.services.metadata_extractor import extract_all_metadata
+
+    auto_meta = extract_all_metadata(full_text)
+    auto_notes: List[str] = []
+    if auto_meta.get("contract_title"):
+        auto_notes.append(
+            f"合同标题由系统自动识别：{auto_meta['contract_title']}"
+        )
+    if auto_meta.get("amount") is not None:
+        auto_notes.append(
+            f"合同金额由系统自动识别：{auto_meta['amount']} 元"
+            f"（来源：{auto_meta.get('amount_source', 'unknown')}）"
+        )
+    else:
+        auto_notes.append("合同金额未能自动识别，路由按 standard 处理")
+    if auto_meta.get("party_b_name"):
+        auto_notes.append(f"相对方由系统自动识别：{auto_meta['party_b_name']}")
+    missing_fields = auto_meta.get("extraction_missing_fields") or []
+    if missing_fields:
+        auto_notes.append(f"以下字段待审批单或人工补充：{', '.join(missing_fields)}")
+
+    # 合同类型轻量识别：基于标题与首段关键词（仅参考，不影响规则引擎判定权）
+    identified_type = _identify_contract_type(full_text)
+    if identified_type and identified_type != "other":
+        auto_meta["contract_type"] = identified_type
+        auto_notes.append(f"合同类型由系统自动识别：{identified_type}")
+
     await task_repo.update_task(
         task_id,
         {
@@ -328,10 +464,15 @@ async def trigger_parse(
             "object_key": object_key,
             "source_type": source_type,
             "file_name": file_name,
+            # 自动识别的标题回填主档：审批单缺失时前端列表可直接显示
+            "contract_title": auto_meta.get("contract_title")
+            or (file_name.rsplit(".", 1)[0] if file_name else None),
             "parse_snapshot": {
                 "full_text": full_text,
                 "text_blocks": snapshot_blocks,
                 "page_count": len(page_texts),
+                "auto_metadata": auto_meta,
+                "auto_notes": auto_notes,
             },
             "updated_at": datetime.now(),
         },
@@ -340,6 +481,19 @@ async def trigger_parse(
     logger.info(
         "文档解析完成 | 任务=%s | 全文长度=%d | 文本块=%d | 页数=%d",
         task_id, len(full_text), len(text_blocks), len(page_texts),
+    )
+    if auto_notes:
+        logger.info("自动识别结果 | 任务=%s | %s", task.task_no, "；".join(auto_notes))
+
+    # -------------------- 自动调度审查（上传即审一条龙） --------------------
+    # 说明：此处不再要求前端/调用方额外触发审查接口；
+    #   审查在后台执行，任务状态经 MongoDB 轮询对前端可见。
+    _schedule_auto_review(
+        task_id=task_id,
+        task_no=task.task_no,
+        object_key=object_key,
+        source_type=source_type,
+        file_name=file_name,
     )
 
     return ParseTriggerOutcome(
@@ -350,8 +504,40 @@ async def trigger_parse(
         full_text_length=len(full_text),
         text_block_count=len(text_blocks),
         clause_count=0,
-        message="解析完成",
+        message="解析完成，审查已自动启动",
     )
+
+
+def _identify_contract_type(text: str) -> str:
+    """
+    基于关键词的合同类型轻量识别
+
+    说明：
+        仅用于解析后给任务打"参考类型"标注（前端展示与规则集预选），
+        【不参与任何风险定级】—— 定级权归规则引擎（架构红线）。
+        规则审查按"通用规则 + 标题关键词匹配"的既有逻辑工作，
+        不依赖本识别结果的正确性。
+
+    参数：
+        text: 合同全文
+
+    返回：
+        识别出的合同类型值（purchase/sales/service/labor/other）
+    """
+    if not text:
+        return "other"
+    head = text[:600]  # 标题与首部信息集中在文本开头
+    rules: List[tuple] = [
+        ("purchase", ("采购", "购销（采购方）", "设备采购", "供货")),
+        ("sales", ("销售合同", "销售协议", "经销")),
+        ("service", ("服务合同", "技术服务", "咨询服务", "运维服务", "委托服务")),
+        ("labor", ("劳动合同", "聘用合同", "劳务合同", "用工")),
+    ]
+    for type_value, keywords in rules:
+        for kw in keywords:
+            if kw in head:
+                return type_value
+    return "other"
 
 
 async def get_parse_result(task_id: str) -> Optional[Dict[str, Any]]:

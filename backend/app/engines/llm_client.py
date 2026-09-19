@@ -107,6 +107,9 @@ class LLMClient:
                 "Content-Type": "application/json",
             },
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            # 【关键】内网/本机大模型服务不走系统代理（理由同 embedding_client）：
+            # 避免本机 HTTP 代理劫持 127.0.0.1 请求造成连接失败或被透传 502
+            trust_env=False,
         )
         logger.info(
             "大模型客户端初始化完成 | 地址=%s | 模型=%s",

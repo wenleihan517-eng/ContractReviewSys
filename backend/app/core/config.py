@@ -343,6 +343,34 @@ class Settings(BaseSettings):
         default=60.0,
         description="单页 OCR 识别超时时间（秒）",
     )
+    OCR_ONLINE_BASE_URL: str = Field(
+        default="",
+        description=(
+            "在线 OCR 服务的 OpenAI 兼容接口地址（如"
+            " https://dashscope.aliyuncs.com/compatible-mode/v1）。"
+            "OCR_ENGINE=online 时必填"
+        ),
+    )
+    OCR_ONLINE_API_KEY: str = Field(
+        default="",
+        description="在线 OCR 服务的 API Key。OCR_ENGINE=online 时必填",
+    )
+    OCR_ONLINE_MODEL: str = Field(
+        default="qwen-vl-plus",
+        description=(
+            "在线 OCR 使用的视觉多模态模型名（OpenAI 兼容 chat/completions 协议）"
+        ),
+    )
+    OCR_ONLINE_LINE_CONFIDENCE: float = Field(
+        default=0.95,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "在线 OCR 的行级置信度占位值。在线视觉模型不返回行级置信度，"
+            "模型可读出即视为清晰；该值需高于 OCR_MIN_CONFIDENCE_THRESHOLD，"
+            "否则所有扫描件都会被判模糊阻断"
+        ),
+    )
 
     # ------------------------------------------------------------------
     # 十一、业务规则引擎配置

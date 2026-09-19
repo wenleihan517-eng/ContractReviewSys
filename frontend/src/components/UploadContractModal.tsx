@@ -1,19 +1,19 @@
 // D:/ContractReviewSys-合同审批智能审查项目/frontend/src/components/UploadContractModal.tsx
 /**
- * 手动上传合同弹窗
+ * 手动上传合同弹窗（上传免填版）
  *
  * 【文件职责】
  *   提供"手动上传合同 → 创建审查任务"的完整链路：
- *     1. 采集合同基础信息（名称 / 编号 / 申请人 / 业务类型 / 金额等）
+ *     1. 选择合同文件（唯一必做动作）
  *     2. 上传合同文件到对象存储，取得 object_key
  *     3. 创建审查任务
- *     4. 触发文档解析，进入审查流水线
+ *     4. 触发文档解析（后端解析完成后自动识别元数据并自动启动审查）
  *
- * 【为什么三步合并在一个弹窗内完成】
- *   上传文件、创建任务、触发解析是三个独立接口，但对使用者而言
- *   只是"提交一份合同送审"这一个动作。若拆成三步让用户手动点击，
- *   中途失败会留下孤儿文件或空任务。因此这里串成一个流程：
- *   任一步失败即中断并明确提示失败在哪一步，已产生的资源可被识别。
+ * 【为什么不再要求填写合同名称 / 合同类型（2026-09-19 用户需求）】
+ *   解析完成后，后端 metadata_extractor 会从合同原文自动识别标题、
+ *   金额、相对方等元数据（含证据留痕）并回填任务主档；合同类型由
+ *   关键词轻量识别标注。因此本弹窗只保留"选文件"一个动作，
+ *   原先的 9 个表单字段全部移除。
  *
  * 【为什么先上传再建任务】
  *   任务创建接口需要 file_object_key。先上传拿到对象键，
@@ -26,14 +26,10 @@ import {
   Alert,
   App,
   Button,
-  Form,
-  Input,
   Modal,
   Progress,
-  Select,
   Space,
   Steps,
-  Typography,
   Upload,
 } from 'antd';
 import { InboxOutlined } from '@ant-design/icons';
@@ -43,7 +39,6 @@ import { parseApi, taskApi } from '@/api/endpoints';
 import { ApiError } from '@/api/client';
 import {
   ALLOWED_UPLOAD_EXTS,
-  CONTRACT_TYPE_OPTIONS,
   MAX_UPLOAD_SIZE,
   SCANNED_IMAGE_EXTS,
 } from '@/constants';
@@ -52,24 +47,7 @@ import { formatFileSize } from '@/utils';
 // 此处以 height:auto 打断并压缩图标与内边距，仅作用于 rootClassName 标记的实例。
 import '@/styles/upload-compact.css';
 
-const { Text } = Typography;
 const { Dragger } = Upload;
-
-/**
- * 表单字段模型
- *
- * 【精简说明（2026-09-19 按用户要求）】
- *   原先包含编号/申请人/部门/相对方/金额等 9 个字段，实际使用中
- *   非必填项拖慢送审操作。现仅保留两个必填项：合同名称与合同类型；
- *   其余字段从表单移除。后端 TaskCreateRequest 中对应字段均为可选，
- *   不传即保持默认值，业务逻辑不受影响。
- */
-interface UploadFormValues {
-  /** 合同名称 */
-  contract_title: string;
-  /** 合同类型（决定命中哪套规则集） */
-  contract_type?: string;
-}
 
 interface UploadContractModalProps {
   /** 弹窗可见性 */
@@ -84,7 +62,7 @@ interface UploadContractModalProps {
 const STEP_ITEMS = [
   { title: '上传文件', description: '存入对象存储' },
   { title: '创建任务', description: '写入审查任务' },
-  { title: '触发解析', description: '进入审查流水线' },
+  { title: '触发解析', description: '自动识别并启动审查' },
 ];
 
 export default function UploadContractModal({
@@ -93,7 +71,6 @@ export default function UploadContractModal({
   onSuccess,
 }: UploadContractModalProps): React.ReactElement {
   const { message } = App.useApp();
-  const [form] = Form.useForm<UploadFormValues>();
 
   /** 已选文件列表（Ant Design Upload 受控模式，始终只保留 1 个文件） */
   const [fileList, setFileList] = useState<UploadFile[]>([]);
@@ -113,7 +90,6 @@ export default function UploadContractModal({
     setUploadPercent(0);
     setSubmitting(false);
     setErrorMessage(null);
-    form.resetFields();
   };
 
   /** 关闭并清理 */
@@ -191,14 +167,6 @@ export default function UploadContractModal({
       return;
     }
 
-    let values: UploadFormValues;
-    try {
-      values = await form.validateFields();
-    } catch {
-      // 表单校验未通过，antd 已在字段下方给出提示
-      return;
-    }
-
     setSubmitting(true);
     setErrorMessage(null);
 
@@ -210,17 +178,21 @@ export default function UploadContractModal({
       });
 
       // ================= 步骤二：创建任务 =================
+      // 说明：合同名称/类型不再由用户填写（上传免填改造），
+      //   标题暂以文件名占位，解析完成后由后端自动识别覆盖；
+      //   业务字段（金额/相对方等）同样由系统从原文自动识别。
       setCurrentStep(1);
       const created = await taskApi.create({
         contract_id: uploaded.object_key,
-        contract_title: values.contract_title,
-        contract_type: values.contract_type,
+        contract_title: uploaded.file_name.replace(/\.[^.]+$/, ''),
         currency: 'CNY',
         source_type: uploaded.source_type,
         file_object_key: uploaded.object_key,
       });
 
       // ================= 步骤三：触发解析 =================
+      // 说明：解析完成后后端会自动识别合同元数据并自动启动审查，
+      //   无需（也没有）单独的"触发审查"前端步骤。
       setCurrentStep(2);
       const triggered = await parseApi.trigger(created.task_id, {
         task_id: created.task_id,
@@ -244,7 +216,7 @@ export default function UploadContractModal({
         return;
       }
 
-      message.success(`合同「${values.contract_title}」已提交审查`);
+      message.success('合同已提交审查，系统将自动识别并启动审查流程');
       resetInternalState();
       onSuccess(created.task_no);
       onClose();
@@ -371,47 +343,9 @@ export default function UploadContractModal({
         <p className="ant-upload-text">点击或拖拽合同文件到此处上传</p>
         <p className="ant-upload-hint" style={{ fontSize: 12 }}>
           支持 PDF / Word / 图片扫描件，单个不超过 {formatFileSize(MAX_UPLOAD_SIZE)}
+          。提交后系统将自动识别合同信息并启动审查。
         </p>
       </Dragger>
-
-      {/* ---------------- 合同信息表单（仅必填项） ----------------
-          按用户要求精简：只保留「合同名称」「合同类型」两个必填字段，
-          其余选填字段（编号/申请人/部门/相对方/金额等）已移除，
-          后端创建任务时这些字段不传、走默认值。 */}
-      <Form
-        form={form}
-        layout="vertical"
-        style={{ marginTop: 16 }}
-        disabled={submitting}
-      >
-        <Form.Item
-          name="contract_title"
-          label="合同名称"
-          rules={[
-            { required: true, message: '请填写合同名称' },
-            { max: 200, message: '合同名称不超过 200 字' },
-          ]}
-        >
-          <Input placeholder="例如：2026 年度服务器设备采购合同" allowClear />
-        </Form.Item>
-
-        <Form.Item
-          name="contract_type"
-          label="合同类型"
-          rules={[{ required: true, message: '请选择合同类型' }]}
-          extra={
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              决定命中的规则集
-            </Text>
-          }
-        >
-          <Select
-            placeholder="请选择"
-            options={CONTRACT_TYPE_OPTIONS}
-            allowClear
-          />
-        </Form.Item>
-      </Form>
     </Modal>
   );
 }

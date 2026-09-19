@@ -239,7 +239,13 @@ class ReviewTask(BaseModel):
 
     # ---------------------- 合同原件引用 ----------------------
     # 说明：审查流程需要读取合同原文（解析节点），而合同业务字段（标题/金额等）
-    #       由审批系统提供。此处只保存"文件在哪"，不保存业务语义字段。
+    #       传统上由审批系统提供。自"上传免填表单"改造后（2026-09-19），
+    #       手动上传任务的业务字段由 metadata_extractor 从合同原文自动识别
+    #       并回填（contract_title），审批单上下文缺失时以识别值兜底。
+    contract_title: Optional[str] = Field(
+        default=None,
+        description="合同标题（审批单提供或解析后由系统自动识别回填；空表示尚未识别）",
+    )
     object_key: Optional[str] = Field(
         default=None, description="合同原件在 MinIO 中的对象键（合同桶）"
     )
