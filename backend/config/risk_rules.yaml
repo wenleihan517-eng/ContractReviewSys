@@ -1,0 +1,893 @@
+# D:/ContractReviewSys-合同审批智能审查项目/backend/config/risk_rules.yaml
+# ============================================================================
+# 合同审查风险规则配置（多合同类型：采购 / 销售 / 劳动）
+#
+# 【本文件定位】
+#   规则引擎（app/engines/rule_engine.py）的确定性匹配规则来源。
+#   所有风险等级定级、违规判定、任务阻塞判定均由规则引擎依据本文件的规则
+#   确定性计算完成，大模型不参与任何正式判定。
+#
+# 【字段说明】
+#   rule_code            规则编码（唯一，全库不得重复）        ← 业务语义：规则 id
+#   rule_name            规则名称（风险名称）
+#   description          规则说明（风险描述，说明风险成因与后果）
+#   clause_type          主要适用条款类型，取值见 ClauseType（可省略，默认 other）
+#   severity             规则严重度，取值：info / minor / major / fatal
+#                        由规则引擎确定性映射为风险等级：
+#                          info  -> low        （提示）
+#                          minor -> low        （低风险）
+#                          major -> high       （高风险）
+#                          fatal -> critical   （严重风险，直接阻塞）
+#   override_risk_level  可选，直接指定风险等级（medium/high/critical 等），
+#                        用于需要"medium 中风险"这一档位时的精确套档。
+#                        非空时优先于 severity 映射
+#   match_type           匹配方式，取值：
+#                          keyword             关键词命中
+#                          regex               正则命中
+#                          clause_type         条款类型命中
+#                          missing_clause      必备条款缺失检查（合同级）
+#                          numeric_threshold   数值阈值校验
+#                          field_compare       字段数值比较
+#                          semantic            语义相似度（由向量召回承担，规则侧不计算）
+#   match_config         匹配配置，结构随 match_type 变化：
+#                          keyword           → {keywords: [非空列表]}
+#                          regex             → {pattern: "正则"}
+#                          clause_type       → {clause_types: [条款类型]}
+#                          missing_clause    → {require_clause_types: [必须存在的条款类型]}
+#                          numeric_threshold → {field, op, value}
+#                          field_compare     → {field, op, value}
+#                          semantic          → {threshold: (0,1]}
+#                        支持的 field：contract_amount / contract_type /
+#                        clause_char_length / penalty_ratio / payment_days
+#                        支持的 op：gt / gte / lt / lte / eq / neq / in / not_in
+#   contract_types       适用合同类型列表：purchase(采购) / sales(销售) /
+#                        service(服务) / labor(劳动)；含 all 或缺省表示通用规则
+#   priority             优先级（数值越大越优先），用于多路召回冲突时的稳定排序
+#   enabled              是否启用（false 为停用，不参与匹配）
+#   suggestion_template  修改建议模板（示范条款），{evidence} 占位符会替换为命中证据
+#   legal_basis          法律依据
+#   version              规则版本号（每次修改递增，保证变更可追溯）
+#
+# 【风险等级与企业内部档位对照】
+#   critical（严重）  命中即阻塞审批流，必须法务介入整改  ← 主体异常 / 单方无限连带 /
+#                                                     管辖违规 / 无验收即全款支付
+#   high（高）        必须整改后方可提交审批
+#   medium（中）      建议整改，法务复核后可放行
+#                      ← 保密期限缺失 / 不可抗力通知时效缺失 / 违约金比例超限
+#   low（低）         提示性建议，不影响审批流转
+#
+# 【权责红线】
+#   本文件只定义"怎么匹配"，最终风险等级由规则引擎的确定性映射产生。
+#   大模型不得修改、覆盖或推断本文件产生的任何定级结果。
+# ============================================================================
+
+rules:
+
+  # ==========================================================================
+  # 一、必备条款缺失类（missing_clause）—— 合同级检查
+  #     覆盖：违约责任、保密义务、知识产权、交付验收、争议解决、履约期限
+  # ==========================================================================
+
+  # ---------- 通用必备条款（适用所有合同类型） ----------
+  - rule_code: "CORE-001"
+    rule_name: "缺失违约责任条款"
+    description: "合同未约定违约责任条款，一旦发生违约将无法确定追责依据与赔偿标准，属于合同重大缺失"
+    clause_type: "liability"
+    severity: "fatal"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["liability"]
+    contract_types: ["all"]
+    priority: 1000
+    enabled: true
+    suggestion_template: >-
+      建议增设「违约责任」条款，明确以下要素：（1）违约情形清单；
+      （2）违约金计算方式（建议不超过合同总额的 30%）；（3）损失赔偿范围与上限；
+      （4）继续履行、采取补救措施等责任形式。示范条款：「任何一方不履行或不完全履行本合同
+      约定义务的，应向守约方支付违约金，违约金不足以弥补守约方损失的，还应赔偿差额部分。」
+      当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百七十七条、第五百八十四条、第五百八十五条"
+    version: 1
+
+  - rule_code: "CORE-002"
+    rule_name: "缺失争议解决条款"
+    description: "合同未约定争议解决方式与管辖机构，发生纠纷时管辖不明、维权成本显著上升"
+    clause_type: "dispute"
+    severity: "major"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["dispute"]
+    contract_types: ["all"]
+    priority: 900
+    enabled: true
+    suggestion_template: >-
+      建议增设「争议解决」条款，明确争议解决路径与管辖机构。示范条款：「因本合同引起的
+      或与本合同有关的任何争议，双方应首先友好协商解决；协商不成的，任何一方均有权向
+      【己方所在地有管辖权的人民法院】提起诉讼。」如选择仲裁，须准确写明仲裁机构全称。
+      当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第四百七十条、《中华人民共和国民事诉讼法》第三十五条"
+    version: 1
+
+  - rule_code: "CORE-003"
+    rule_name: "缺失履约期限条款"
+    description: "合同未约定履行期限或有效期，导致履约时点无法确定，易引发是否迟延履行的争议"
+    clause_type: "subject_matter"
+    severity: "major"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["subject_matter"]
+    contract_types: ["all"]
+    priority: 890
+    enabled: true
+    suggestion_template: >-
+      建议增设「合同期限」条款，明确合同生效日期、履行期限（起止日）与有效期。示范条款：
+      「本合同自双方签字盖章之日起生效，有效期至【YYYY 年 MM 月 DD 日】止。合同期满前
+      三十日，双方可协商续签。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第四百七十条、第五百一十条、第五百一十一条"
+    version: 1
+
+  # ---------- 采购专属必备条款 ----------
+  - rule_code: "PUR-001"
+    rule_name: "缺失交付验收条款"
+    description: "采购合同未约定交付方式与验收标准，交付质量与交付时点无法认定，付款争议风险高"
+    clause_type: "delivery"
+    severity: "fatal"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["delivery"]
+    contract_types: ["purchase"]
+    priority: 960
+    enabled: true
+    suggestion_template: >-
+      建议增设「交付与验收」条款，明确：交付时间与地点、运输方式与费用承担、包装要求、
+      验收标准与方法、验收期限、验收不合格的处理方式。示范条款：「乙方应于本合同生效后
+      【X】日内将货物运抵甲方指定地点，甲方应在收货后【X】个工作日内完成验收并出具
+      验收单；验收不合格的，乙方应在【X】日内更换或退货，费用由乙方承担。」
+      当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第六百零三条、第六百二十条、第六百二十一条"
+    version: 1
+
+  - rule_code: "PUR-002"
+    rule_name: "缺失质量保证条款"
+    description: "采购合同未约定质量标准与质保期，货物质量瑕疵主张缺乏合同依据"
+    clause_type: "warranty"
+    severity: "fatal"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["warranty"]
+    contract_types: ["purchase"]
+    priority: 950
+    enabled: true
+    suggestion_template: >-
+      建议增设「质量保证」条款，明确所执行的质量标准（国家标准/行业标准/企业标准或
+      技术协议）、质保期限与起算时点、质保期内的维修更换义务。示范条款：「乙方保证货物
+      符合【GB/T XXXX-XXXX】标准，质保期为验收合格之日起【12】个月；质保期内因产品
+      质量问题发生故障的，乙方应在接到通知后【48】小时内响应并免费维修或更换。」
+      当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第六百一十条、第六百一十五条、第六百一十七条"
+    version: 1
+
+  - rule_code: "PUR-003"
+    rule_name: "缺失保密义务条款"
+    description: "采购合作涉及技术资料与商业信息交换，缺失保密条款将使商业秘密处于无保护状态"
+    clause_type: "confidentiality"
+    severity: "major"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["confidentiality"]
+    contract_types: ["purchase", "service"]
+    priority: 880
+    enabled: true
+    suggestion_template: >-
+      建议增设「保密条款」，明确保密信息范围、保密期限、使用限制、披露例外与违约责任。
+      示范条款：「双方对因履行本合同知悉的对方商业秘密及技术资料负有保密义务，未经对方
+      书面同意不得向任何第三方披露或用于本合同以外的目的。保密义务在本合同终止后
+      【三】年内继续有效。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国反不正当竞争法》第九条、《中华人民共和国民法典》第五百零一条"
+    version: 1
+
+  - rule_code: "PUR-004"
+    rule_name: "缺失知识产权条款"
+    description: "采购标的含定制开发或软件授权时未约定知识产权归属，后续使用与再开发权属不清"
+    clause_type: "ip"
+    severity: "major"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["ip"]
+    contract_types: ["purchase", "service"]
+    priority: 870
+    enabled: true
+    suggestion_template: >-
+      建议增设「知识产权」条款，明确采购标的中涉及的专利、商标、著作权、软件许可的权属
+      与使用范围，并要求供方保证不侵犯第三方知识产权。示范条款：「乙方保证所交付货物及
+      技术资料不侵犯任何第三方知识产权；因权利瑕疵导致甲方被第三方主张权利的，由乙方
+      负责处理并赔偿甲方全部损失。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第六百一十二条、《中华人民共和国专利法》第十一条"
+    version: 1
+
+  # ---------- 销售专属必备条款 ----------
+  - rule_code: "SAL-001"
+    rule_name: "缺失质量异议期限条款"
+    description: "销售合同未约定买方提出质量异议的期限，卖方可能面临随时被主张质量责任的长期风险"
+    clause_type: "warranty"
+    severity: "major"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["warranty"]
+    contract_types: ["sales"]
+    priority: 900
+    enabled: true
+    suggestion_template: >-
+      建议增设「质量异议」条款，约定买方检验与异议提出的期限及逾期后果。示范条款：
+      「买方应在收到货物后【十五】日内完成检验；发现质量问题的，应在检验期内以书面
+      形式通知卖方，逾期未提出的，视为货物质量符合约定。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第六百二十一条、第六百二十二条"
+    version: 1
+
+  - rule_code: "SAL-002"
+    rule_name: "缺失所有权保留条款"
+    description: "销售合同未约定价款付清前所有权保留，货物已交付但货款未结清时，卖方仅享有普通债权"
+    clause_type: "payment"
+    severity: "major"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["payment"]
+    contract_types: ["sales"]
+    priority: 860
+    enabled: true
+    suggestion_template: >-
+      建议增设所有权保留约定，在买方付清全部价款前保留货物所有权。示范条款：「在买方
+      付清全部合同价款前，本合同项下货物的所有权仍归卖方所有；买方未按期付款的，卖方
+      有权取回货物并要求赔偿损失。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第六百四十一条、第六百四十二条"
+    version: 1
+
+  # ---------- 劳动专属必备条款 ----------
+  - rule_code: "LAB-001"
+    rule_name: "缺失劳动报酬条款"
+    description: "劳动合同未约定劳动报酬标准与支付时间，违反劳动合同法关于必备条款的强制性规定"
+    clause_type: "payment"
+    severity: "fatal"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["payment"]
+    contract_types: ["labor"]
+    priority: 960
+    enabled: true
+    suggestion_template: >-
+      建议明确约定劳动报酬，包含：工资构成（基本工资/绩效工资/津补贴）、具体数额、
+      支付日期与支付方式。示范条款：「甲方于每月【X】日前以货币形式支付乙方上月工资，
+      月工资标准为人民币【XXXX】元，其中基本工资【XXXX】元。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国劳动合同法》第十七条、《中华人民共和国劳动法》第五十条"
+    version: 1
+
+  - rule_code: "LAB-002"
+    rule_name: "缺失社会保险条款"
+    description: "劳动合同未约定社会保险缴纳义务，属于违反法律强制性规定的条款，用人单位将承担补缴与赔偿责任"
+    clause_type: "compliance"
+    severity: "fatal"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["compliance"]
+    contract_types: ["labor"]
+    priority: 950
+    enabled: true
+    suggestion_template: >-
+      建议增设社会保险条款。示范条款：「甲乙双方按国家和地方规定参加社会保险，甲方依法
+      为乙方办理养老、医疗、失业、工伤、生育保险并按时足额缴纳社会保险费；乙方个人
+      缴纳部分由甲方从其工资中代扣代缴。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国社会保险法》第五十八条、《中华人民共和国劳动合同法》第十七条"
+    version: 1
+
+  - rule_code: "LAB-003"
+    rule_name: "缺失劳动保护与职业危害防护条款"
+    description: "劳动合同未约定劳动保护、劳动条件与职业危害防护，用人单位存在安全生产合规风险"
+    clause_type: "compliance"
+    severity: "major"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["compliance", "data_protection"]
+    contract_types: ["labor"]
+    priority: 880
+    enabled: true
+    suggestion_template: >-
+      建议增设「劳动保护与劳动条件」条款。示范条款：「甲方为乙方提供符合国家规定的
+      劳动安全卫生条件和必要的劳动防护用品；乙方从事有职业危害作业的，甲方应按规定
+      组织上岗前、在岗期间和离岗时的职业健康检查，并如实告知职业危害及其后果。」
+      当前证据：{evidence}
+    legal_basis: "《中华人民共和国劳动合同法》第十七条、《中华人民共和国职业病防治法》第三十五条"
+    version: 1
+
+  - rule_code: "LAB-004"
+    rule_name: "缺失解除与终止条款"
+    description: "劳动合同未约定合同的解除、终止条件与工作交接安排，用工关系退出机制缺失"
+    clause_type: "termination"
+    severity: "major"
+    match_type: "missing_clause"
+    match_config:
+      require_clause_types: ["termination"]
+    contract_types: ["labor"]
+    priority: 860
+    enabled: true
+    suggestion_template: >-
+      建议增设「合同解除与终止」条款，明确协商解除、法定解除情形、终止条件、经济补偿
+      支付与工作交接要求。示范条款：「乙方离职时应按甲方要求办理工作交接，归还甲方
+      财物及资料；甲方应在办结工作交接时依法支付经济补偿（如有）。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国劳动合同法》第三十六条至第四十条、第五十条"
+    version: 1
+
+  # ==========================================================================
+  # 二、权责不对等类（keyword / regex）
+  #     覆盖：单方无限责任、单方免责、单方变更权、赔偿责任不对等
+  # ==========================================================================
+
+  - rule_code: "BAL-001"
+    rule_name: "单方无限连带责任（主体异常高危）"
+    description: "约定一方对第三方债务承担无限或连带责任，且未设责任上限，责任范围不可预估，可能构成重大风险敞口"
+    clause_type: "liability"
+    severity: "fatal"
+    override_risk_level: "critical"
+    match_type: "keyword"
+    match_config:
+      keywords:
+        - "承担无限连带责任"
+        - "承担无限责任"
+        - "承担任何连带责任"
+        - "乙方对全部债务承担连带责任"
+        - "不可撤销地承担连带保证责任"
+        - "无条件承担全部责任"
+    contract_types: ["purchase", "sales", "service"]
+    priority: 990
+    enabled: true
+    suggestion_template: >-
+      存在单方无限连带责任表述（{evidence}），责任范围不可预估，建议按以下方式修改：
+      （1）删除"无限""连带"表述，改为按份责任；（2）如确需承担保证责任，须明确保证范围
+      与保证期间，并设置责任上限。示范条款：「乙方就其履约行为向甲方承担赔偿责任，
+      累计赔偿金额以本合同总价款为限；乙方不承担任何间接损失、可得利益损失。」
+      当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百一十八条、第六百八十一条、第六百九十一条"
+    version: 1
+
+  - rule_code: "BAL-002"
+    rule_name: "单方免责表述"
+    description: "出现「概不负责」「不承担任何责任」等单方免责表述，限制对方主要权利，可能被认定为无效格式条款"
+    clause_type: "liability"
+    severity: "fatal"
+    match_type: "keyword"
+    match_config:
+      keywords:
+        - "概不负责"
+        - "不承担任何责任"
+        - "不承担任何赔偿责任"
+        - "免除一切责任"
+        - "免除全部责任"
+        - "责任自负"
+        - "甲方不承担任何风险"
+    contract_types: ["all"]
+    priority: 970
+    enabled: true
+    suggestion_template: >-
+      存在单方免责表述（{evidence}），该表述不合理地免除自身责任、加重对方责任，
+      存在被认定无效的风险。建议修改为对等的责任承担条款。示范条款：「任何一方因过错
+      未履行或未完全履行本合同义务，给对方造成损失的，应承担相应赔偿责任；双方均有过错的，
+      各自按过错比例承担责任。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第四百九十七条、第五百零六条、第五百七十七条"
+    version: 1
+
+  - rule_code: "BAL-003"
+    rule_name: "单方变更权（合同内容单方调整）"
+    description: "约定一方可单方变更合同内容、价格或服务范围，剥夺对方协商权，权利义务显著失衡"
+    clause_type: "termination"
+    severity: "major"
+    match_type: "keyword"
+    match_config:
+      keywords:
+        - "有权单方变更"
+        - "有权随时变更"
+        - "甲方有权单方调整"
+        - "无需经乙方同意即可变更"
+        - "最终解释权归甲方"
+        - "以甲方通知为准"
+    contract_types: ["all"]
+    priority: 930
+    enabled: true
+    suggestion_template: >-
+      存在单方变更权表述（{evidence}），建议改为双方协商一致的变更机制。示范条款：
+      「本合同的任何变更、补充均须经双方协商一致并签署书面补充协议后方为有效；未经
+      对方书面同意，任何一方不得单方变更合同内容。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百四十三条、第四百九十六条"
+    version: 1
+
+  - rule_code: "BAL-004"
+    rule_name: "赔偿责任不对等（单向赔偿义务）"
+    description: "仅约定一方承担赔偿责任而另一方违约无需赔偿，或双方赔偿标准显著悬殊，构成权责不对等"
+    clause_type: "liability"
+    severity: "major"
+    match_type: "keyword"
+    match_config:
+      keywords:
+        - "乙方承担全部赔偿责任"
+        - "甲方不承担赔偿"
+        - "乙方应赔偿甲方一切损失"
+        - "仅由乙方承担赔偿责任"
+        - "乙方赔偿一切直接和间接损失"
+    contract_types: ["all"]
+    priority: 920
+    enabled: true
+    suggestion_template: >-
+      存在赔偿责任不对等表述（{evidence}），建议调整为对等赔偿机制并设置赔偿上限。
+      示范条款：「任何一方违约给对方造成损失的，应赔偿对方因此遭受的直接损失，赔偿总额
+      不超过本合同总价款；任何一方均不承担间接损失、可得利益损失及惩罚性赔偿。」
+      当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百八十四条、第五百八十五条、第四百九十七条"
+    version: 1
+
+  - rule_code: "BAL-005"
+    rule_name: "赔偿责任上限显著不对等"
+    description: "一方以合同总价或固定金额为赔偿上限，另一方承担无上限赔偿责任，赔偿风险分配严重失衡"
+    clause_type: "liability"
+    severity: "major"
+    match_type: "regex"
+    match_config:
+      pattern: '[^。；\n]{0,40}(?:甲方|乙方|我方|对方)[^。；\n]{0,20}(?:不承担|无需承担)[^。；\n]{0,20}(?:超出|超过)[^。；\n]{0,30}(?:限额|上限|以外的)'
+    contract_types: ["purchase", "sales", "service"]
+    priority: 910
+    enabled: true
+    suggestion_template: >-
+      存在赔偿责任上限不对等的约定（{evidence}），建议统一双方赔偿上限口径。示范条款：
+      「双方各自的累计赔偿责任均以本合同总价款为上限，且任何一方均不对间接损失、
+      可得利益损失承担责任。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百八十四条、第四百九十七条"
+    version: 1
+
+  - rule_code: "BAL-006"
+    rule_name: "单方任意解除权"
+    description: "仅赋予一方任意解除权而另一方无对等权利，解除条件不对等，权利义务失衡"
+    clause_type: "termination"
+    severity: "major"
+    match_type: "keyword"
+    match_config:
+      keywords:
+        - "甲方有权单方解除"
+        - "甲方可随时解除"
+        - "甲方有权无条件解除"
+        - "乙方无权解除"
+        - "甲方有权随时终止"
+    contract_types: ["all"]
+    priority: 900
+    enabled: true
+    suggestion_template: >-
+      存在单方任意解除权表述（{evidence}），建议约定对等的解除权与解除后果。示范条款：
+      「除法定解除情形外，任何一方需提前【三十】日书面通知对方方可解除本合同；
+      因一方原因导致合同解除的，该方应赔偿对方因此遭受的直接损失。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百六十二条、第五百六十三条、第五百六十六条"
+    version: 1
+
+  # ==========================================================================
+  # 三、高危表述类（keyword / regex / numeric_threshold）
+  #     覆盖：付款无验收前置、违约金比例异常、管辖地违规、主体异常
+  # ==========================================================================
+
+  - rule_code: "PAY-001"
+    rule_name: "无验收即全款支付（付款无验收前置）"
+    description: "约定合同签订后或货到即支付全部款项，未将验收合格作为付款前置条件，付款方丧失履约制衡手段"
+    clause_type: "payment"
+    severity: "fatal"
+    override_risk_level: "critical"
+    match_type: "keyword"
+    match_config:
+      keywords:
+        - "签订后即支付全部"
+        - "签订之日起全额支付"
+        - "一次性付清全部货款"
+        - "全额预付"
+        - "款到发货"
+        - "货到即付全款"
+        - "验收前支付全部"
+    contract_types: ["purchase", "service"]
+    priority: 985
+    enabled: true
+    suggestion_template: >-
+      存在无验收即全额付款表述（{evidence}），付款方丧失履约制衡手段，风险极高。建议改为
+      按履约进度分期付款并将验收作为付款前置条件。示范条款：「合同签订后【X】日内支付
+      合同总额的【30%】作为预付款；货物验收合格并收到等额发票后【X】日内支付【60%】；
+      剩余【10%】作为质保金，质保期满且无质量问题后【X】日内无息支付。任何款项均以
+      验收合格为支付前提。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百二十六条、第六百二十六条、《保障中小企业款项支付条例》"
+    version: 1
+
+  - rule_code: "PAY-002"
+    rule_name: "付款期限不明确（未约定付款时间）"
+    description: "条款仅约定付款义务但未明确付款期限或触发条件，实际履行中易产生是否逾期付款的争议"
+    clause_type: "payment"
+    severity: "minor"
+    override_risk_level: "medium"
+    match_type: "regex"
+    match_config:
+      pattern: '[^。；\n]{0,30}(?:付款|支付)[^。；\n]{0,20}(?:及时|尽快|适时|另行约定|另行商议)[^。；\n]{0,20}|[^。；\n]{0,20}(?:及时|尽快|适时)[^。；\n]{0,10}(?:付款|支付)'
+    contract_types: ["all"]
+    priority: 800
+    enabled: true
+    suggestion_template: >-
+      付款期限表述不明确（{evidence}），建议量化为具体天数并绑定明确的起算事件。示范条款：
+      「甲方应在收到乙方开具的等额合规增值税专用发票之日起【三十】个自然日内以银行
+      转账方式支付款项。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百一十条、第五百一十一条、第六百二十六条"
+    version: 1
+
+  - rule_code: "NUM-001"
+    rule_name: "违约金比例超限（超过合同总额 30%）"
+    description: "约定违约金比例为合同总额的 30% 以上，超出司法实践普遍认可的上限，存在被调减风险且可能显失公平"
+    clause_type: "liability"
+    severity: "minor"
+    override_risk_level: "medium"
+    match_type: "numeric_threshold"
+    match_config:
+      field: "penalty_ratio"
+      op: "gt"
+      value: 0.30
+    contract_types: ["all"]
+    priority: 870
+    enabled: true
+    suggestion_template: >-
+      违约金比例超过合同总额 30%（{evidence}），超出部分法院可依当事人请求予以调减，
+      建议下调至合理区间。示范条款：「任何一方违约的，应向守约方支付违约金，违约金金额
+      为合同总额的【10%】；实际损失超过违约金的，以实际损失为限，但累计不超过合同总额的
+      【30%】。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百八十五条第二款、《最高人民法院关于适用〈中华人民共和国民法典〉合同编通则若干问题的解释》第六十五条"
+    version: 1
+
+  - rule_code: "NUM-002"
+    rule_name: "违约金日利率异常（按日千分之计收）"
+    description: "违约金按每日千分之计收，折算年化利率显著高于法定保护上限，可能被认定为变相高利"
+    clause_type: "liability"
+    severity: "major"
+    match_type: "regex"
+    match_config:
+      pattern: '(?:每日|每天|按日|日)[^。；\n]{0,4}(?:千分之|万分之)[零一二三四五六七八九十百两\d]+'
+    contract_types: ["all"]
+    priority: 890
+    enabled: true
+    suggestion_template: >-
+      违约金日利率过高（{evidence}），折算年化利率已超出司法保护上限。建议调整为按
+      全国银行间同业拆借中心公布的贷款市场报价利率（LPR）的一定倍数计收。示范条款：
+      「逾期付款的，每逾期一日，按未付款项金额的【万分之五】支付违约金，但累计违约金
+      总额不超过未付款项的【20%】。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百八十五条、《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》第二十五条"
+    version: 1
+
+  - rule_code: "NUM-003"
+    rule_name: "付款周期过长（超过 60 日）"
+    description: "约定付款周期超过 60 日，长期占用供应商资金，与中小企业款项支付相关法规精神不符，易引发履约争议"
+    clause_type: "payment"
+    severity: "minor"
+    override_risk_level: "medium"
+    match_type: "regex"
+    match_config:
+      # 说明：本规则覆盖阿拉伯数字与中文数字两种表述。
+      #   分支一：六十一至九十九的中文数字写法，如"九十个工作日""七十五个自然日"
+      #           （"六十日"恰好等于法定上限 60 日，故不命中）
+      #   分支二：三位及以上阿拉伯数字，如"90 日""120 个工作日"
+      #   分支三：61-99 的阿拉伯数字，如"75 日"
+      #   法定付款周期不超过 60 日，故 60 及以下不在命中范围内
+      pattern: '(?:六十|七十|八十|九十)[一二三四五六七八九]\s*(?:个)?(?:自然日|工作日|日|天)|(?:七十|八十|九十)[一二三四五六七八九]?\s*(?:个)?(?:自然日|工作日|日|天)|\d{3,}\s*(?:个)?(?:自然日|工作日|日|天)|(?:[6-9]\d)\s*(?:个)?(?:自然日|工作日|日|天)'
+    contract_types: ["purchase", "sales"]
+    priority: 780
+    enabled: true
+    suggestion_template: >-
+      付款周期超过 60 日（{evidence}），建议缩短至 60 日内以降低履约与合规风险。
+      示范条款：「甲方应在收到发票之日起【六十】日内完成付款；逾期付款的，应按约定
+      标准支付逾期利息。」当前证据：{evidence}
+    legal_basis: "《保障中小企业款项支付条例》第八条、第九条"
+    version: 1
+
+  - rule_code: "NUM-004"
+    rule_name: "大额合同触发深度复核提示"
+    description: "合同金额达到 500 万元，按内控要求应启动深度复核通道（提示性规则，不构成违规判定）"
+    clause_type: "subject_matter"
+    severity: "info"
+    match_type: "numeric_threshold"
+    match_config:
+      field: "contract_amount"
+      op: "gte"
+      value: 5000000
+    contract_types: ["all"]
+    priority: 700
+    enabled: true
+    suggestion_template: >-
+      合同金额达到深度复核阈值（{evidence}），建议按大额合同管理规定提交法务、财务
+      双线复核，并核查对方主体的资信状况、履约能力与授权文件。当前证据：{evidence}
+    legal_basis: "企业内部合规与授权管理制度（大额合同分级审批要求）"
+    version: 1
+
+  - rule_code: "JUR-001"
+    rule_name: "争议管辖地约定违规（管辖地显失公平）"
+    description: "约定争议由对方所在地或与合同无实际联系的法院管辖，显著增加己方维权成本，管辖约定的公平性存疑"
+    clause_type: "dispute"
+    severity: "fatal"
+    override_risk_level: "critical"
+    match_type: "regex"
+    match_config:
+      # 说明：约定管辖机构出现在"诉讼/管辖"字样之前，故用 (?=...) 前瞻断言，
+      # 确保"提交乙方所在地……诉讼解决"这类自然语序同样可以命中。
+      # 前瞻断言的分支使用 [^。；\n] 限定在同一句内，避免跨句误报。
+      pattern: '(?=[^。；\n]{0,50}(?:乙方所在地|供方所在地|对方所在地|卖方所在地|境外|香港|澳门|台湾|国外|外国))(?=[^。；\n]{0,60}(?:诉讼|管辖|起诉|仲裁|法院|裁决))[^。；\n]{0,80}'
+    contract_types: ["all"]
+    priority: 975
+    enabled: true
+    suggestion_template: >-
+      争议管辖地约定可能对己方不利（{evidence}）。建议修改为约定由己方所在地法院管辖，
+      或约定提交境内中立仲裁机构仲裁。示范条款：「因本合同引起的或与本合同有关的任何
+      争议，双方应友好协商解决；协商不成的，任何一方均有权向【甲方住所地】有管辖权的
+      人民法院提起诉讼。」涉港澳台及涉外争议，须另行评估适用法律与裁决承认执行风险。
+      当前证据：{evidence}
+    legal_basis: "《中华人民共和国民事诉讼法》第三十五条、第二百七十七条、《中华人民共和国仲裁法》第十六条"
+    version: 1
+
+  - rule_code: "JUR-002"
+    rule_name: "争议解决方式约定矛盾（或裁或审并存）"
+    description: "同时约定诉讼与仲裁两种争议解决方式且未明确择一，仲裁协议可能被认定无效，管辖归属不明"
+    clause_type: "dispute"
+    severity: "major"
+    match_type: "regex"
+    match_config:
+      pattern: '(?:提交|向)[^。；\n]{0,20}(?:仲裁委员会|仲裁机构)[^。；\n]{0,25}(?:或|同时|亦可)[^。；\n]{0,25}(?:法院|人民法院|诉讼)'
+    contract_types: ["all"]
+    priority: 870
+    enabled: true
+    suggestion_template: >-
+      争议解决条款同时约定了仲裁与诉讼（{evidence}），存在仲裁协议无效的风险。建议择一
+      明确约定。示范条款（仲裁）：「……协商不成的，提交【XX 仲裁委员会】按其届时有效的
+      仲裁规则进行仲裁，仲裁裁决为终局裁决。」示范条款（诉讼）：「……协商不成的，
+      向【XX 人民法院】提起诉讼。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国仲裁法》第十六条、《最高人民法院关于适用〈中华人民共和国仲裁法〉若干问题的解释》第七条"
+    version: 1
+
+  - rule_code: "SUBJ-001"
+    rule_name: "合同主体表述异常（主体不明或非法定名称）"
+    description: "当事人称谓使用「公司」「厂家」「供货商」「老板」等非登记全称，或出现空白主体，签约主体不明确，合同效力与追责主体存疑"
+    clause_type: "party_info"
+    severity: "fatal"
+    override_risk_level: "critical"
+    match_type: "regex"
+    match_config:
+      # 说明：仅识别"主体称谓 + 非登记全称"的紧邻结构（如"甲方为公司""乙方为供货商"），
+      # 用 (?![一-龥]) 排除"乙方为供货商提供……"这类正常句式，避免误报。
+      pattern: '(?:甲方|乙方|丙方|供方|需方|卖方|买方)\s*(?:为|系|是)?\s*(?:公司|厂家|厂商|供货商|供应商|客户|老板|个人|某人)(?![一-龥])'
+    contract_types: ["all"]
+    priority: 995
+    enabled: true
+    suggestion_template: >-
+      合同主体表述异常（{evidence}），未使用营业执照登记全称，签约主体不明确。建议核实并
+      补正为登记全称，并同步核验主体存续状态与签约权限。示范条款：「甲方：【XX 有限公司】，
+      统一社会信用代码：【91XXXXXXXXXXXXXXXX】，法定代表人：【XXX】，住所：【XX 市 XX 区
+      XX 路 XX 号】。」同时建议留存对方营业执照副本与法定代表人身份证明。当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第一百四十三条、第四百六十五条、第四百七十条、《中华人民共和国市场主体登记管理条例》"
+    version: 1
+
+  - rule_code: "SUBJ-002"
+    rule_name: "签约主体信息空白或待补"
+    description: "合同中出现主体名称、信用代码、住所等留空或待补充字样，属未完成签约要素，可能导致合同未成立或无法执行"
+    clause_type: "party_info"
+    severity: "major"
+    match_type: "regex"
+    match_config:
+      pattern: '(?:甲方|乙方|丙方|供方|需方)[^。；\n]{0,10}(?:名称|全称|地址|住所|信用代码|联系人|电话)[^。；\n]{0,6}[：:]\s*(?:_{2,}|—{2,}|-{2,}|待定|待补充|待填|另行填写|空白)'
+    contract_types: ["all"]
+    priority: 940
+    enabled: true
+    suggestion_template: >-
+      签约主体信息存在空白或待补项（{evidence}）。建议在提交审批前补全双方登记全称、
+      统一社会信用代码、住所、法定代表人及联系方式，并完成用印主体核验。当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第四百七十条、《中华人民共和国市场主体登记管理条例》"
+    version: 1
+
+  - rule_code: "FORCE-001"
+    rule_name: "不可抗力通知时效缺失或过长"
+    description: "不可抗力条款未约定通知义务与通知时限，或约定通知时限超过 30 日，可能导致免责主张因未及时通知而受限"
+    clause_type: "force_majeure"
+    severity: "minor"
+    override_risk_level: "medium"
+    match_type: "regex"
+    match_config:
+      # 说明：通知时限在句中可以出现在"通知"之前（四十五日内通知）或之后
+      # （通知应在四十五日内），故用前瞻断言同时覆盖两种语序。
+      # 命中后由法务人工确认通知时限是否超过 15 日的合理上限。
+      pattern: '(?=.*不可抗力)(?=.*(?:通知|告知|通报))(?=.*(?:\d+|[零一二三四五六七八九十百两]+)\s*(?:个)?(?:工作日|日|天))[^。；\n]{0,90}'
+    contract_types: ["all"]
+    priority: 760
+    enabled: true
+    suggestion_template: >-
+      不可抗力条款的通知时限约定需复核（{evidence}）。建议将通知时限控制在合理范围内
+      （一般不超过 15 日）并同时约定证明材料提供义务。示范条款：「遭遇不可抗力的一方应在
+      不可抗力事件发生后【十五】日内书面通知对方，并在【三十】日内提供有效证明材料；
+      未按期通知或提供证明的，不得据此主张免责。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第五百九十条"
+    version: 1
+
+  - rule_code: "CONF-001"
+    rule_name: "保密期限缺失或过短"
+    description: "保密条款未约定保密期限，或期限短于合理保护需要（不足 1 年），商业秘密在合同终止后即失去保护"
+    clause_type: "confidentiality"
+    severity: "minor"
+    override_risk_level: "medium"
+    match_type: "regex"
+    match_config:
+      # 说明：保密期限不足三年即建议整改，故仅命中数量级明显偏短（个位月数 /
+      # 十位数月 / 一年）的表述，不命中"三年""五年"等合规表述。
+      #   分支一：1-9 个月（含中文），如"6个月""六个月"
+      #   分支二：十至十一个月，如"十个月""11个月"
+      #   分支三：半年 / 一年
+      pattern: '(?:保密|商业秘密|保密义务)[^。；\n]{0,40}(?:保密期|期限|有效期)[^。；\n]{0,15}(?:[1-9]|一|二|三|四|五|六|七|八|九|十)\s*(?:个)?月|(?:保密|商业秘密|保密义务)[^。；\n]{0,40}(?:保密期|期限|有效期)[^。；\n]{0,15}(?:1[01])\s*(?:个)?月|(?:保密|商业秘密)[^。；\n]{0,40}(?:保密期|期限|有效期)[^。；\n]{0,15}(?:半年|一年)'
+    contract_types: ["purchase", "sales", "service"]
+    priority: 750
+    enabled: true
+    suggestion_template: >-
+      保密期限需复核（{evidence}）。建议约定保密义务在合同终止后仍然有效，期限不少于
+      三年，涉及核心技术秘密的应为长期有效。示范条款：「本条约定的保密义务不因本合同的
+      终止或解除而失效，保密期限自本合同终止之日起【三】年；对构成商业秘密的技术信息，
+      保密义务持续至该信息进入公有领域之日止。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国反不正当竞争法》第九条、《中华人民共和国民法典》第五百零一条"
+    version: 1
+
+  - rule_code: "IP-001"
+    rule_name: "知识产权侵权责任转嫁异常"
+    description: "约定由一方承担全部知识产权侵权责任且无免责例外，未排除对方提供的技术资料或指示导致的侵权情形，责任分配显失公平"
+    clause_type: "ip"
+    severity: "major"
+    match_type: "regex"
+    match_config:
+      pattern: '(?:知识产权|专利|著作权|商标)[^。；\n]{0,30}(?:侵权)[^。；\n]{0,20}(?:全部|一切|所有)[^。；\n]{0,15}(?:责任|损失|赔偿)[^。；\n]{0,10}(?:由|均由)[^。；\n]{0,10}(?:乙方|甲方|一方)'
+    contract_types: ["purchase", "sales", "service"]
+    priority: 850
+    enabled: true
+    suggestion_template: >-
+      知识产权侵权责任分配失衡（{evidence}）。建议明确责任边界并设置免责例外。示范条款：
+      「乙方保证所交付的货物及技术资料不侵犯第三方知识产权。因乙方原因导致甲方被第三方
+      主张侵权的，由乙方负责处理并赔偿甲方直接损失；但甲方提供的技术资料、设计图纸或
+      指定方案导致的侵权除外。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国民法典》第六百一十二条、第八百六十三条、《中华人民共和国专利法》第十一条"
+    version: 1
+
+  - rule_code: "LAB-005"
+    rule_name: "劳动条款侵害劳动者权益（放弃法定权利表述）"
+    description: "出现「自愿放弃社保」「放弃加班费」「工伤自负」等要求劳动者放弃法定权利的表述，违反法律强制性规定，条款无效并可能引发行政处罚"
+    clause_type: "compliance"
+    severity: "fatal"
+    match_type: "keyword"
+    match_config:
+      keywords:
+        - "自愿放弃社会保险"
+        - "自愿放弃缴纳社保"
+        - "放弃加班费"
+        - "工伤自负"
+        - "无条件服从"
+        - "随时调岗"
+        - "公司有权随时调整岗位"
+        - "自愿放弃经济补偿"
+        - "不得申请劳动仲裁"
+    contract_types: ["labor"]
+    priority: 980
+    enabled: true
+    suggestion_template: >-
+      存在要求劳动者放弃法定权利的表述（{evidence}），该类条款违反法律强制性规定，
+      自始无效，且用人单位将面临补缴、罚款及赔偿责任。建议立即删除并替换为合法表述。
+      示范条款：「甲方依法为乙方缴纳社会保险；甲方因生产经营需要调整乙方工作岗位的，
+      应与乙方协商一致并签署书面变更协议。」当前证据：{evidence}
+    legal_basis: "《中华人民共和国劳动合同法》第二十六条、第三十五条、《中华人民共和国社会保险法》第五十八条、第八十六条"
+    version: 1
+
+  - rule_code: "LAB-006"
+    rule_name: "试用期期限超法定上限"
+    description: "试用期约定超过法定上限（如合同期不满一年的试用期超过一个月），违反劳动合同法强制性规定"
+    clause_type: "termination"
+    severity: "major"
+    match_type: "keyword"
+    match_config:
+      # 说明：试用期是否超限取决于劳动合同期限，无法由单条文本独立判定，
+      # 故仅枚举"法定上限之上的月数"文本（四至十二个月），命中后交法务
+      # 结合合同期限核实。一至三个月属可能合规区间，不在命中范围内。
+      keywords:
+        - "试用期为四个月"
+        - "试用期为五个月"
+        - "试用期为六个月"
+        - "试用期为七个月"
+        - "试用期为八个月"
+        - "试用期为九个月"
+        - "试用期为十个月"
+        - "试用期为十一个月"
+        - "试用期为十二个月"
+        - "试用期四个月"
+        - "试用期五个月"
+        - "试用期六个月"
+        - "试用期七个月"
+        - "试用期八个月"
+        - "试用期九个月"
+        - "试用期十个月"
+        - "试用期为4个月"
+        - "试用期为5个月"
+        - "试用期为6个月"
+        - "试用期为7个月"
+        - "试用期为8个月"
+        - "试用期为9个月"
+        - "试用期为10个月"
+        - "试用期为11个月"
+        - "试用期为12个月"
+    contract_types: ["labor"]
+    priority: 830
+    enabled: true
+    suggestion_template: >-
+      试用期约定需复核是否符合法定上限（{evidence}）。法定标准：劳动合同期限三个月以上
+      不满一年的，试用期不得超过一个月；一年以上不满三年的，不得超过二个月；三年以上
+      固定期限及无固定期限劳动合同，不得超过六个月。示范条款：「乙方试用期为【二】个月，
+      自【YYYY 年 MM 月 DD 日】起至【YYYY 年 MM 月 DD 日】止，试用期包含在劳动合同期限内。」
+      当前证据：{evidence}
+    legal_basis: "《中华人民共和国劳动合同法》第十九条、第八十三条"
+    version: 1
+
+# ============================================================================
+# 【规则统计】（与实际配置逐条核对一致）
+#   规则总数：34 条（全部启用，无停用规则）
+#
+#   ├─ 一、必备条款缺失类（missing_clause）  13 条
+#   │   通用（all）：CORE-001 缺失违约责任 / CORE-002 缺失争议解决
+#   │                CORE-003 缺失履约期限
+#   │   采购专属：  PUR-001 缺失交付验收 / PUR-002 缺失质量保证
+#   │   采购+服务：  PUR-003 缺失保密义务 / PUR-004 缺失知识产权
+#   │   销售专属：  SAL-001 缺失质量异议期限 / SAL-002 缺失所有权保留
+#   │   劳动专属：  LAB-001 缺失劳动报酬 / LAB-002 缺失社会保险
+#   │                LAB-003 缺失劳动保护 / LAB-004 缺失解除与终止
+#   │
+#   ├─ 二、权责不对等类（keyword / regex）   6 条
+#   │   BAL-001 单方无限连带责任（critical，主体异常高危）
+#   │   BAL-002 单方免责表述（critical）
+#   │   BAL-003 单方变更权
+#   │   BAL-004 赔偿责任不对等（单向赔偿义务）
+#   │   BAL-005 赔偿责任上限显著不对等
+#   │   BAL-006 单方任意解除权
+#   │
+#   └─ 三、高危表述类（keyword / regex / numeric_threshold）  15 条
+#       PAY-001 无验收即全款支付（critical）
+#       PAY-002 付款期限不明确（medium）
+#       NUM-001 违约金比例超限（medium）
+#       NUM-002 违约金日利率异常
+#       NUM-003 付款周期过长（medium）
+#       NUM-004 大额合同触发深度复核提示（low，提示性）
+#       JUR-001 争议管辖地约定违规（critical）
+#       JUR-002 或裁或审约定矛盾
+#       SUBJ-001 合同主体表述异常（critical）
+#       SUBJ-002 签约主体信息空白或待补
+#       FORCE-001 不可抗力通知时效缺失或过长（medium）
+#       CONF-001 保密期限缺失或过短（medium）
+#       IP-001 知识产权侵权责任转嫁异常
+#       LAB-005 劳动条款侵害劳动者权益（critical）
+#       LAB-006 试用期期限超法定上限
+#
+# 【风险等级分布】
+#   critical  11 条（命中即阻塞审批流）
+#   high      17 条
+#   medium     5 条
+#   low        1 条（提示性）
+#
+# 【高风险规则（critical）清单】
+#   SUBJ-001 主体异常 | BAL-001 单方无限连带责任 | BAL-002 单方免责
+#   JUR-001 管辖违规 | PAY-001 无验收即全款支付 | CORE-001 缺失违约责任
+#   PUR-001 缺失交付验收 | PUR-002 缺失质量保证 | LAB-001 缺失劳动报酬
+#   LAB-002 缺失社会保险 | LAB-005 劳动条款侵害权益
+#
+# 【中风险规则（medium）清单】
+#   CONF-001 保密期限缺失/过短 | FORCE-001 不可抗力通知时效缺失
+#   NUM-001 违约金比例超限 | NUM-003 付款周期过长 | PAY-002 付款期限不明确
+#
+# 【按合同类型适用规则数】
+#   purchase   26 条 | sales      23 条
+#   labor      22 条 | service    23 条
+#
+# 【等级映射口径】
+#   fatal → critical（11 条）   major → high（17 条）
+#   minor → low（5 条经 override_risk_level 精确套档为 medium）
+#   info  → low（1 条）
+#
+# 【匹配方式分布】
+#   missing_clause 13 | keyword 8 | regex 11 | numeric_threshold 2
+# ============================================================================

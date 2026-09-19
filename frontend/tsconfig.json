@@ -1,0 +1,12 @@
+// D:/ContractReviewSys-合同审批智能审查项目/frontend/tsconfig.json
+// =====================================================================
+// TypeScript 编译配置（工程引用入口）
+// 说明：实际编译规则拆分为 tsconfig.app.json（源码）与 tsconfig.node.json（构建脚本）
+// =====================================================================
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}

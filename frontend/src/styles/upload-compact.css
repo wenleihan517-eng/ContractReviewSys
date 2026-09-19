@@ -1,0 +1,55 @@
+/* D:/ContractReviewSys-合同审批智能审查项目/frontend/src/styles/upload-compact.css */
+/**
+ * 手动上传弹窗的紧凑拖拽区样式
+ *
+ * 【为什么需要这个文件】
+ *   antd 5 的 Upload.Dragger 默认样式给 .ant-upload-drag 与
+ *   .ant-upload-btn 都设置了 height: 100%，形成"互相依赖"的百分比高度链。
+ *   在弹窗这类父容器高度不受约束的场景下，该链条会被浏览器以意外方式
+ *   拉伸（实测被拉到 622px），导致拖拽区在弹窗中占据大面积空白。
+ *
+ *   这里通过 height: auto 打断百分比链，让拖拽区高度回归"由内容决定"，
+ *   同时收窄按钮内边距、缩小图标，使整体高度回落到约 90px 的紧凑形态。
+ *
+ * 【作用范围】
+ *   仅作用于通过 rootClassName="compact-upload-dragger" 标记的 Dragger
+ *   （即 UploadContractModal 中的上传控件），不影响页面其他上传组件。
+ *   选择器特异性（0-2-0）高于 antd 的 :where 降权规则（0-1-0），无需 !important。
+ */
+
+/* 打断 100% 高度链：拖拽区高度改由内容撑起
+   说明：antd 的规则形如
+     :where(.css-xxx).ant-upload-wrapper .ant-upload-drag { height: 100% }
+   :where 内部计零后其特异性同为 0-2-0，且 cssinjs 的样式表在运行时
+   动态插入文档更靠后位置，同特异性时后者胜出。因此这里必须用
+   !important（0-2-0 + important）确保覆盖，属于覆盖第三方内部
+   高度链的合理使用场景。 */
+.compact-upload-dragger .ant-upload-drag {
+  height: auto !important;
+}
+
+.compact-upload-dragger .ant-upload-btn {
+  height: auto !important;
+  /* 默认 16px 上下内边距收窄为 12px，进一步压缩视觉高度 */
+  padding: 12px 0 !important;
+}
+
+/* 图标由默认 48px 级别缩至 28px，行高压紧 */
+.compact-upload-dragger .ant-upload-drag-icon {
+  margin-bottom: 4px;
+  line-height: 1;
+}
+
+.compact-upload-dragger .ant-upload-drag-icon .anticon {
+  font-size: 28px;
+}
+
+/* 主文案与提示文案字号微调，配合紧凑布局 */
+.compact-upload-dragger .ant-upload-text {
+  font-size: 14px;
+  margin: 0 0 2px;
+}
+
+.compact-upload-dragger .ant-upload-hint {
+  font-size: 12px;
+}
