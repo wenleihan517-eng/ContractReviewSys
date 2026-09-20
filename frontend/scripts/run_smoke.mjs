@@ -159,6 +159,108 @@ if (!global.URL.createObjectURL) {
   global.URL.revokeObjectURL = () => {};
 }
 
+// ----------------------------------------------------------------------
+// 网络层桩（关键，防止背景请求污染测试状态）
+// ----------------------------------------------------------------------
+//
+// 背景：MainLayout 内嵌 NotificationCenter，挂载时即发起未读数请求，
+// 并每 30 秒轮询一次。在 jsdom 中这些请求没有真实服务端可打，
+// axios 会抛网络错误；而 axios 拦截器对「鉴权类错误」会调用
+// onAuthFatal → purgeLocalAuth() 清空登录态 → 正在渲染的 MainLayout
+// 拿到 user=null，菜单与角色 Tag 全部消失。
+//
+// 由于该请求的时序与 React 调度交错，表现为**偶发**的断言失败（flaky），
+// 排查成本极高。正确做法是：测试环境一律屏蔽真实网络，
+// 让所有请求返回一个可控的空成功响应，从根上消除这类干扰。
+//
+// 返回体形状与后端统一响应一致：{ code: 0, message: 'ok', data: {...} }
+class MockXHR {
+  constructor() {
+    this.readyState = 0;
+    this.status = 200;
+    this.responseText = '';
+    this.response = '';
+    this._headers = {};
+    this.upload = { addEventListener: () => {}, removeEventListener: () => {} };
+  }
+
+  open(method, url) {
+    this._method = method;
+    this._url = url;
+    this.readyState = 1;
+  }
+
+  setRequestHeader(key, value) {
+    this._headers[key] = value;
+  }
+
+  getAllResponseHeaders() {
+    return 'content-type: application/json\r\n';
+  }
+
+  getResponseHeader() {
+    return 'application/json';
+  }
+
+  /**
+   * 发送：异步回一个「空成功」响应
+   *
+   * data 依 URL 给出最小可用形状：
+   *   - unread-count → { unread_count: 0 }
+   *   - notifications → { items: [], total: 0 }
+   *   - 其他         → {}
+   */
+  send() {
+    const url = this._url ?? '';
+    let data = {};
+    if (url.includes('unread-count')) {
+      data = { unread_count: 0 };
+    } else if (url.includes('notifications')) {
+      data = { items: [], total: 0, page: 1, page_size: 20 };
+    }
+    this.status = 200;
+    this.readyState = 4;
+    this.responseText = JSON.stringify({
+      code: 0,
+      message: 'ok',
+      data,
+      request_id: 'mock',
+    });
+    this.response = this.responseText;
+
+    setTimeout(() => {
+      if (typeof this.onreadystatechange === 'function') {
+        this.onreadystatechange();
+      }
+      if (typeof this.onload === 'function') {
+        this.onload();
+      }
+      if (typeof this.onloadend === 'function') {
+        this.onloadend();
+      }
+    }, 0);
+  }
+
+  abort() {}
+  addEventListener(type, handler) {
+    // 仅需支持 load/error 的最简绑定
+    if (type === 'load') this.onload = handler;
+    if (type === 'error') this.onerror = handler;
+  }
+  removeEventListener() {}
+}
+
+global.XMLHttpRequest = MockXHR;
+dom.window.XMLHttpRequest = MockXHR;
+
+// fetch 兜底：同样返回空成功体，避免任何遗漏的请求逃逸到真实网络
+global.fetch = async () =>
+  new Response(
+    JSON.stringify({ code: 0, message: 'ok', data: {}, request_id: 'mock' }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } },
+  );
+dom.window.fetch = global.fetch;
+
 // 动画帧：React 调度器依赖
 global.requestAnimationFrame = (callback) => setTimeout(() => callback(Date.now()), 0);
 global.cancelAnimationFrame = (id) => clearTimeout(id);
@@ -869,8 +971,17 @@ await check('主布局：菜单按角色过滤，经办人看不到工作台与�
 
   /**
    * 渲染指定角色的布局，返回 innerHTML
+   *
+   * 说明（易踩坑）：seedAuthUser 在 render **之后** 用 zustand setState 写入登录态，
+   * 这会触发订阅该 store 的 MainLayout 重渲染。React 18 的更新是并发调度的，
+   * 在 jsdom + act 环境下偶发「store 已更新、DOM 尚未刷新」的中间态，
+   * 使菜单为空、角色 Tag 缺失 —— 属于测试脚手架竞态，不是产品缺陷。
+   *
+   * 正确做法：**先 seed 状态，再 render**。首帧渲染时 store 已是目标角色，
+   * 不存在二次更新，结果完全确定。
    */
   const renderForRole = async (role) => {
+    // 先写入登录态（此时还没有任何组件订阅）
     await seedAuthUser(role);
     const container = dom.window.document.createElement('div');
     dom.window.document.body.appendChild(container);
@@ -918,15 +1029,6 @@ await check('主布局：菜单按角色过滤，经办人看不到工作台与�
 
   // 法务审查人：应看到大盘与工作台，不得看到规则
   const lawHtml = await renderForRole('law_user');
-  if (process.env.DBG_LAW) {
-    console.log('=== LAW HTML (role tag search) ===');
-    console.log('has 智能审查工作台:', lawHtml.includes('智能审查工作台'));
-    console.log('has 合同审查大盘:', lawHtml.includes('合同审查大盘'));
-    console.log('has 法务审查人:', lawHtml.includes('法务审查人'));
-    console.log('length:', lawHtml.length);
-    console.log(lawHtml.slice(0, 3000));
-    console.log('=== END LAW ===');
-  }
   if (!lawHtml.includes('智能审查工作台')) {
     throw new Error('法务应能看到「智能审查工作台」菜单入口');
   }
