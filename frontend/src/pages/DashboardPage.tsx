@@ -500,16 +500,20 @@ export default function DashboardPage(): React.ReactElement {
     {
       title: '操作',
       key: 'action',
-      width: 150,
+      width: 230,
       fixed: 'right',
       render: (_value, row) => {
         const actioning = actioningTaskNos.includes(row.task_no);
         const canRetry = RETRYABLE_STATUSES.includes(row.status);
         const isFailed = row.status === TASK_STATUS.FAILED;
-        // 重新上传权限：仅合同提交经办人 / 管理员；审查员不可替换原文件（权责分离）
+        const isBlockedRow = row.status === TASK_STATUS.BLOCKED;
+        // 重新上传权限：执行失败 或 已阻塞 的任务均可替换文件
+        //（阻塞任务往往因文件内容缺陷被规则引擎拦截，重跑无效，需上传修正版）；
+        // 仅提交经办人 / 管理员可操作，审查员不可替换原文件（权责分离）
         const canReplace =
-          isFailed &&
-          (user?.role === 'admin' || (row.created_by && row.created_by === user?.username));
+          (isFailed || isBlockedRow) &&
+          (user?.role === 'admin' ||
+            (row.created_by && row.created_by === user?.username));
 
         return (
           <Space size={4} wrap>
@@ -561,10 +565,16 @@ export default function DashboardPage(): React.ReactElement {
 
   return (
     <div>
-      {/* ================= 顶部统计卡片 ================= */}
+      {/* ================= 顶部统计卡片（点击卡片切入对应筛选维度） ================= */}
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={8} md={8} lg={4}>
-          <Card size="small" variant="outlined">
+          <Card
+            size="small"
+            variant="outlined"
+            hoverable
+            onClick={() => setQuickFilter('all')}
+            style={STAT_CARD_STYLE}
+          >
             <Statistic
               title="待审合同总数"
               value={summary.total}
@@ -573,7 +583,13 @@ export default function DashboardPage(): React.ReactElement {
           </Card>
         </Col>
         <Col xs={12} sm={8} md={8} lg={4}>
-          <Card size="small" variant="outlined">
+          <Card
+            size="small"
+            variant="outlined"
+            hoverable
+            onClick={() => setQuickFilter('high')}
+            style={STAT_CARD_STYLE}
+          >
             <Statistic
               title="严重 / 高风险"
               value={summary.critical + summary.high}
@@ -586,7 +602,13 @@ export default function DashboardPage(): React.ReactElement {
           </Card>
         </Col>
         <Col xs={12} sm={8} md={8} lg={4}>
-          <Card size="small" variant="outlined">
+          <Card
+            size="small"
+            variant="outlined"
+            hoverable
+            onClick={() => setQuickFilter('blocked')}
+            style={STAT_CARD_STYLE}
+          >
             <Statistic
               title="阻塞待处理"
               value={summary.blocked}
@@ -598,7 +620,13 @@ export default function DashboardPage(): React.ReactElement {
           </Card>
         </Col>
         <Col xs={12} sm={8} md={8} lg={4}>
-          <Card size="small" variant="outlined">
+          <Card
+            size="small"
+            variant="outlined"
+            hoverable
+            onClick={() => setQuickFilter('failed')}
+            style={STAT_CARD_STYLE}
+          >
             <Statistic
               title="执行失败"
               value={summary.failed}
@@ -610,7 +638,13 @@ export default function DashboardPage(): React.ReactElement {
           </Card>
         </Col>
         <Col xs={12} sm={8} md={8} lg={4}>
-          <Card size="small" variant="outlined">
+          <Card
+            size="small"
+            variant="outlined"
+            hoverable
+            onClick={() => setQuickFilter('completed')}
+            style={STAT_CARD_STYLE}
+          >
             <Statistic
               title="审查已完成"
               value={summary.completed}
@@ -759,7 +793,7 @@ export default function DashboardPage(): React.ReactElement {
           columns={columns}
           dataSource={displayedRows}
           loading={loading}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1500 }}
           size="middle"
           locale={{
             emptyText: (
@@ -853,3 +887,8 @@ export default function DashboardPage(): React.ReactElement {
     </div>
   );
 }
+
+/** 统计卡样式：可点击切入对应筛选维度 */
+const STAT_CARD_STYLE: React.CSSProperties = {
+  cursor: 'pointer',
+};

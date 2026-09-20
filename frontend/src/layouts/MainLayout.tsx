@@ -322,7 +322,7 @@ export default function MainLayout(): React.ReactElement {
             zIndex: 10,
           }}
         >
-          <Space size={8}>
+          <Space size={8} style={{ flexShrink: 0, minWidth: 0 }}>
             {/* 手机端：汉堡按钮唤起抽屉导航 */}
             {isMobile && (
               <Button
@@ -333,7 +333,11 @@ export default function MainLayout(): React.ReactElement {
                 style={{ fontSize: 18 }}
               />
             )}
-            <Text strong style={{ fontSize: isMobile ? 15 : 16 }}>
+            {/* 标题禁止换行：窄屏换行会把 Header 撑高、观感割裂 */}
+            <Text
+              strong
+              style={{ fontSize: isMobile ? 15 : 16, whiteSpace: 'nowrap' }}
+            >
               {currentTitle}
             </Text>
           </Space>
@@ -377,10 +381,14 @@ export default function MainLayout(): React.ReactElement {
                   icon={<UserOutlined />}
                 />
                 <Space size={6}>
-                  <Text style={{ fontSize: 13 }}>
-                    {user?.display_name ?? '未登录'}
-                  </Text>
-                  {user && (
+                  {/* 手机端只留头像：用户名与角色 Tag 过宽会把标题挤出换行，
+                      完整身份信息可通过头像下拉菜单查看 */}
+                  {!isMobile && (
+                    <Text style={{ fontSize: 13 }}>
+                      {user?.display_name ?? '未登录'}
+                    </Text>
+                  )}
+                  {user && !isMobile && (
                     <Tag
                       color={USER_ROLE_TAG_COLOR[user.role]}
                       style={{ marginInlineEnd: 0, fontSize: 11 }}

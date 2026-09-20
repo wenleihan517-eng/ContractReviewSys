@@ -62,6 +62,7 @@ import RiskCard from '@/components/RiskCard';
 import ReviewFooterPanel from '@/components/ReviewFooterPanel';
 import { taskApi } from '@/api/endpoints';
 import {
+  BLOCKED_REASON_LABEL,
   RISK_LEVEL_LABEL,
   RISK_LEVEL_TAG_COLOR,
   FAILURE_TYPE_LABEL,
@@ -211,7 +212,8 @@ export default function WorkbenchPage(): React.ReactElement {
 
   /** 重新上传权限：仅提交经办人 / 管理员（权责分离，2026-09-20） */
   const canReplaceFile =
-    taskDetail?.status === TASK_STATUS.FAILED &&
+    (taskDetail?.status === TASK_STATUS.FAILED ||
+      taskDetail?.status === TASK_STATUS.BLOCKED) &&
     (user?.role === 'admin' ||
       (taskDetail.created_by && taskDetail.created_by === user?.username));
 
@@ -394,6 +396,47 @@ export default function WorkbenchPage(): React.ReactElement {
             <Button size="small" onClick={() => void generateReport('md')}>
               查看风险报告
             </Button>
+          }
+        />
+      )}
+
+      {/* ================= 顶部：已阻塞操作横幅（2026-09-20） ================= */}
+      {isBlocked && (
+        <Alert
+          type="warning"
+          showIcon
+          message="任务已被规则引擎阻塞"
+          description={
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <span>
+                阻塞原因：
+                {taskDetail?.blocked_reason
+                  ? BLOCKED_REASON_LABEL[taskDetail.blocked_reason] ??
+                    taskDetail.blocked_reason
+                  : '未标注'}
+                。重跑将从阻塞阶段继续（内容缺陷类阻塞重跑仍会再次阻塞）；
+                若为文件内容问题，建议重新上传替换修正版合同文件。
+              </span>
+            </Space>
+          }
+          action={
+            <Space>
+              <Button size="small" icon={<SyncOutlined />} onClick={() => handleWorkbenchRetry()}>
+                重跑
+              </Button>
+              {canReplaceFile && (
+                <Upload
+                  showUploadList={false}
+                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.tif,.tiff,.bmp"
+                  beforeUpload={(file) => {
+                    void handleWorkbenchReplace(file as unknown as File);
+                    return false;
+                  }}
+                >
+                  <Button size="small">重新上传</Button>
+                </Upload>
+              )}
+            </Space>
           }
         />
       )}
