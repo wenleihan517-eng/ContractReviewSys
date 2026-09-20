@@ -158,6 +158,21 @@ interface LoginFormValues {
 const REMEMBERED_USERNAME_KEY = 'cr_remembered_username';
 
 /**
+ * 演示账号快捷登录配置
+ *
+ * 说明：密码统一为 123456；验证码填 "demo"（纯前端演示校验，
+ * 点击按钮时同步把验证码比对值置为 demo 以绕过本地校验）。
+ */
+const QUICK_LOGIN_ACCOUNTS: ReadonlyArray<{
+  label: string;
+  username: string;
+}> = [
+  { label: '业务经办人', username: 'user_business' },
+  { label: '法务审查人', username: 'user_law' },
+  { label: '系统管理员', username: 'user_admin' },
+];
+
+/**
  * 读取上次记住的账号
  *
  * 说明：只记住**账号**，绝不记住密码。
@@ -215,6 +230,8 @@ export default function LoginPage(): React.ReactElement {
   );
   /** 画布引用 */
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /** 登录按钮引用（快捷填充后聚焦，便于一键回车提交） */
+  const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   /** 表单级错误提示（账号密码错误等） */
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -275,6 +292,38 @@ export default function LoginPage(): React.ReactElement {
       drawCaptcha(canvasRef.current, captchaText);
     }
   }, [captchaText]);
+
+  /**
+   * 快捷身份选择：一键回填账号/密码/验证码
+   *
+   * 参数：
+   *   username: 目标演示账号
+   *
+   * 返回：
+   *   无
+   *
+   * 说明：
+   *   1. 密码保持星号隐藏（Input.Password 组件天然处理）
+   *   2. 验证码填入 "demo"，并同步把 captchaText 置为 demo 并重绘，
+   *      使前端本地比对通过（"绕过"仅针对演示版纯前端校验，
+   *      后端登录接口不校验验证码，本改动不触碰后端）
+   *   3. 回填后清除旧错误提示，并把焦点定位到登录按钮，
+   *      用户按回车或点击即可提交登录
+   */
+  const handleQuickFill = (username: string): void => {
+    const demoCaptcha = 'demo';
+    form.setFieldsValue({
+      username,
+      password: '123456',
+      captcha: demoCaptcha,
+    });
+    setCaptchaText(demoCaptcha);
+    if (canvasRef.current) {
+      drawCaptcha(canvasRef.current, demoCaptcha);
+    }
+    setFormError(null);
+    submitButtonRef.current?.focus();
+  };
 
   /**
    * 提交登录
@@ -492,6 +541,7 @@ export default function LoginPage(): React.ReactElement {
 
           <Form.Item style={{ marginBottom: 0 }}>
             <Button
+              ref={submitButtonRef}
               type="primary"
               size="large"
               htmlType="submit"
@@ -503,17 +553,24 @@ export default function LoginPage(): React.ReactElement {
           </Form.Item>
         </Form>
 
-        {/* ---------------- 演示账号提示 ---------------- */}
+        {/* ---------------- 快捷身份选择（演示账号一键填充） ---------------- */}
         <div style={DEMO_BOX_STYLE}>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            演示账号（密码均为 <Text code>123456</Text>）：
+            演示账号（密码均为 <Text code>123456</Text>），点击一键填充：
           </Text>
-          <div style={{ marginTop: 6 }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              · 业务经办人 <Text code>user_business</Text> · 法务审查人{' '}
-              <Text code>user_law</Text> · 系统管理员{' '}
-              <Text code>user_admin</Text>
-            </Text>
+          <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+            {QUICK_LOGIN_ACCOUNTS.map((account) => (
+              <Button
+                key={account.username}
+                size="small"
+                disabled={loggingIn}
+                onClick={() => handleQuickFill(account.username)}
+                style={QUICK_LOGIN_BUTTON_STYLE}
+                title={`以「${account.label}」身份快捷登录`}
+              >
+                {account.label}
+              </Button>
+            ))}
           </div>
         </div>
       </Card>
@@ -611,4 +668,13 @@ const DEMO_BOX_STYLE: React.CSSProperties = {
   border: '1px solid #f0f0f0',
   borderRadius: 6,
   lineHeight: 1.7,
+};
+
+/** 快捷身份按钮：小而横向并排，沿用页面蓝色主色调，hover 时 antd 自动加深 */
+const QUICK_LOGIN_BUTTON_STYLE: React.CSSProperties = {
+  flex: 1,
+  fontSize: 12,
+  borderColor: '#1677ff',
+  color: '#1677ff',
+  whiteSpace: 'nowrap',
 };
