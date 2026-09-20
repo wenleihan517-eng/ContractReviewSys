@@ -613,29 +613,46 @@ class Settings(BaseSettings):
         default="your-approval-api-key",
         description="审批系统对接鉴权密钥",
     )
-    # ------------------ 消息通知（分级推送） ------------------
-    QQ_PUSH_WEBHOOK_URL: str = Field(
+    # ------------------ 消息通知（分级推送，QQ 邮箱） ------------------
+    SMTP_HOST: str = Field(
+        default="smtp.qq.com",
+        description="SMTP 服务器地址（QQ 邮箱 smtp.qq.com）",
+    )
+    SMTP_PORT: int = Field(
+        default=465,
+        description="SMTP 端口（465=SSL，587=STARTTLS）",
+    )
+    SMTP_USE_SSL: bool = Field(
+        default=True,
+        description="是否使用 SSL（465 端口用 True；587 用 False）",
+    )
+    SMTP_USER: str = Field(
         default="",
-        description=(
-            "QQ 通知推送 Webhook 地址（POST JSON）。"
-            "为空时 QQ 通道跳过（通知仅落库，状态记 skipped），不影响站内通知"
-        ),
+        description="SMTP 发件账号（QQ 邮箱号，如 2584076700@qq.com）",
     )
-    QQ_NOTIFY_OPERATOR: str = Field(
-        default="2241071024",
-        description="经办员 QQ 号：接收本人提交合同的审查成功/失败全部通知",
+    SMTP_PASSWORD: str = Field(
+        default="",
+        description="SMTP 授权码（QQ 邮箱-设置-账户-开启 SMTP 后获取的授权码，非登录密码）",
     )
-    QQ_NOTIFY_ADMIN: str = Field(
-        default="2584076700",
-        description="管理员 QQ 号：仅接收执行失败、系统级异常通知",
+    SMTP_FROM: str = Field(
+        default="明契智审 <contract-review@qq.com>",
+        description="发件人显示名与地址",
     )
-    QQ_NOTIFY_REVIEWER: str = Field(
-        default="1623084893",
-        description="审查员 QQ 号：仅接收异常任务通知",
+    NOTIFY_OPERATOR_EMAIL: str = Field(
+        default="2241071024@qq.com",
+        description="经办员 QQ 邮箱：接收本人提交合同的审查成功/失败全部通知",
     )
-    QQ_NOTIFY_GROUP: str = Field(
-        default="1070152604",
-        description="工作群号：仅推送大批量 OCR 失败、系统故障等高优先级异常",
+    NOTIFY_ADMIN_EMAIL: str = Field(
+        default="2584076700@qq.com",
+        description="管理员 QQ 邮箱：仅接收执行失败、系统级异常通知",
+    )
+    NOTIFY_REVIEWER_EMAIL: str = Field(
+        default="1623084893@qq.com",
+        description="审查员 QQ 邮箱：仅接收异常任务通知",
+    )
+    NOTIFY_GROUP_EMAIL: str = Field(
+        default="1070152604@qq.com",
+        description="工作群 QQ 邮箱：仅推送大批量 OCR 失败、系统故障等高优先级异常",
     )
     APPROVAL_TIMEOUT_SECONDS: float = Field(
         default=30.0,

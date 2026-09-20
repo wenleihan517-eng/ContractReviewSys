@@ -50,10 +50,10 @@ class Notification(BaseModel):
     read: bool = Field(default=False, description="是否已读（跳转工作台后自动置真）")
     read_at: Optional[datetime] = Field(default=None, description="已读时间")
 
-    # ---------------------- QQ 通道状态 ----------------------
-    qq_push_status: str = Field(
+    # ---------------------- 邮件通道状态 ----------------------
+    email_push_status: str = Field(
         default="pending",
-        description="QQ 推送状态 pending/sent/skipped；未配置 webhook 时为 skipped",
+        description="邮件推送状态 pending/sent/skipped/failed；未配置 SMTP 时为 skipped",
     )
 
     created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
