@@ -1,0 +1,41 @@
+{
+  "name": "contract-review-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "_path": "D:/ContractReviewSys-合同审批智能审查项目/frontend/package.json",
+  "description": "合同审批智能审查系统 - 前端工程（React 18 + TypeScript + Vite + Ant Design 5 + pdfjs-dist）",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "antd": "^5.22.5",
+    "@ant-design/icons": "^5.5.2",
+    "pdfjs-dist": "^4.7.76",
+    "axios": "^1.7.9",
+    "react-router-dom": "^6.28.0",
+    "zustand": "^5.0.2",
+    "dayjs": "^1.11.13"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.17",
+    "@types/react-dom": "^18.3.5",
+    "@typescript-eslint/eslint-plugin": "^8.18.1",
+    "@typescript-eslint/parser": "^8.18.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.16",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

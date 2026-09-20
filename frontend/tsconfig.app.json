@@ -1,0 +1,54 @@
+// D:/ContractReviewSys-合同审批智能审查项目/frontend/tsconfig.app.json
+// =====================================================================
+// TypeScript 编译配置（应用源码）
+// 适用范围：src 目录下的全部 .ts / .tsx 文件
+// 说明：JSON 不支持注释，本文件为便于阅读已放宽为 JSONC，tsc 可正常解析
+// =====================================================================
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* 模块解析 */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* 严格模式：开启全部严格检查，保证类型安全 */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+
+    /* 路径别名，与 vite.config.ts 中的 resolve.alias 保持一致 */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      /* ------------------------------------------------------------------
+       * antd 深层类型路径映射
+       *
+       * 背景：antd 5.29 未声明 package.json 的 exports 字段，
+       * 在 moduleResolution: "bundler" 下，形如 'antd/es/table' 的深层
+       * 导入会被解析到 .js 实现而非同名 .d.ts，导致 TS7016（隐式 any）
+       * 或 TS2305（具名导出不存在）。
+       *
+       * 这些 .d.ts 文件实际存在于磁盘上，只是解析规则未命中，
+       * 因此用 paths 显式指向类型声明文件即可，无需手写 declare module
+       * 覆盖原有类型（那样会丢失 antd 的真实类型信息）。
+       * ------------------------------------------------------------------ */
+      "antd/es/table": ["./node_modules/antd/es/table/index.d.ts"],
+      "antd/es/table/interface": ["./node_modules/antd/es/table/interface.d.ts"],
+      "antd/es/tree": ["./node_modules/antd/es/tree/index.d.ts"],
+      "antd/es/tree/interface": ["./node_modules/antd/es/tree/interface.d.ts"],
+      "antd/es/upload/interface": ["./node_modules/antd/es/upload/interface.d.ts"]
+    }
+  },
+  "include": ["src"]
+}

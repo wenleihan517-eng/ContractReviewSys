@@ -1,0 +1,22 @@
+// D:/ContractReviewSys-合同审批智能审查项目/frontend/tsconfig.node.json
+// =====================================================================
+// TypeScript 编译配置（构建脚本）
+// 适用范围：vite.config.ts 等 Node 环境运行的构建配置
+// =====================================================================
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["vite.config.ts"]
+}
