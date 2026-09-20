@@ -81,6 +81,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await init_all_storages()
 
+    # 步骤 2.5：清理僵尸任务（2026-09-20 新增）
+    # 说明：上次运行被重启/杀进程打断的 running 任务会永远停在
+    # "审查中 0%"（无进程再更新状态），既不能重试也没有重新上传入口。
+    # 启动时统一置为 failed 并写明原因，使其回到可处置链路。
+    try:
+        from app.services import task_service
+
+        interrupted = await task_service.recover_interrupted_tasks()
+    except Exception as exc:  # noqa: BLE001 - 清理失败不阻断启动
+        logger.error("僵尸任务清理失败 | 异常=%s", exc)
+    else:
+        if interrupted:
+            logger.warning(
+                "启动清理完成：已将 %d 条中断任务置为失败，等待用户重试",
+                interrupted,
+            )
+
     # 步骤 3：初始化模型服务客户端（仅建立连接池，不做推理）
     from app.engines import embedding_client, llm_client
 

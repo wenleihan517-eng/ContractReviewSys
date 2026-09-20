@@ -321,6 +321,51 @@ async def list_approval_pending(page: int = 1, page_size: int = 20) -> Tuple[Lis
 # ======================================================================
 # 任务处理操作留痕（2026-09-20 数据与流程闭环）
 # ======================================================================
+async def recover_interrupted_tasks() -> int:
+    """
+    启动时清理僵尸任务：把上次服务运行中断的任务统一置为失败
+
+    【为什么需要（2026-09-20 修复）】
+        后端重启/被杀时，正处于 running / parsing 的任务会永远停在
+        "审查中 0%"——没有任何进程会再更新它们的状态（僵尸任务）。
+        僵尸任务既不是 failed 也不是 blocked，导致使用者既不能重试
+        也看不到「重新上传」入口，只能干等。
+
+        本函数在应用启动（存储就绪后）调用一次，把这些中断任务
+        统一标记为 failed 并写明原因，使其重新进入可重试 /
+        可重新上传的处置链路。
+
+    返回：
+        被标记为失败的任务条数
+    """
+    from datetime import datetime
+
+    from app.constants import MongoCollection, FailureType, ReviewTaskStatus
+    from app.storage.mongo_client import mongo_client
+
+    collection = mongo_client.get_collection(MongoCollection.REVIEW_TASK)
+    result = await collection.update_many(
+        {"status": ReviewTaskStatus.RUNNING.value},
+        {
+            "$set": {
+                "status": ReviewTaskStatus.FAILED.value,
+                "parse_status": "failed",
+                "failure_type": FailureType.OTHER.value,
+                "failure_reason": (
+                    "服务重启导致任务中断，请点击重试或重新上传"
+                ),
+                "updated_at": datetime.now(),
+            }
+        },
+    )
+    if result.modified_count > 0:
+        logger.warning(
+            "启动清理：发现 %d 条服务重启中断的僵尸任务，已统一置为失败",
+            result.modified_count,
+        )
+    return result.modified_count
+
+
 async def record_task_operation(
     task_no: str,
     operator: str,
