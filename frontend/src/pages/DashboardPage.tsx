@@ -32,11 +32,13 @@ import {
   Col,
   Empty,
   Input,
+  Pagination,
   Progress,
   Row,
   Segmented,
   Select,
   Space,
+  Spin,
   Statistic,
   Table,
   Tag,
@@ -72,6 +74,7 @@ import {
   type TaskStatus,
 } from '@/constants';
 import { useAuthStore } from '@/stores/authStore';
+import { useResponsive } from '@/hooks/useResponsive';
 import {
   selectDashboardSummary,
   useTaskStore,
@@ -138,6 +141,7 @@ export default function DashboardPage(): React.ReactElement {
   const batchRetry = useTaskStore((state) => state.batchRetry);
   const stopPolling = useTaskStore((state) => state.stopPolling);
   const user = useAuthStore((state) => state.user);
+  const { isMobile } = useResponsive();
 
   // ---------------- 本地 UI 状态 ----------------
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -302,6 +306,74 @@ export default function DashboardPage(): React.ReactElement {
         setSelected([]);
       },
     });
+  };
+
+  /**
+   * 行操作按钮组（表格操作列与移动端卡片列表共用）
+   *
+   * 参数：
+   *   row: 任务行
+   *
+   * 返回：
+   *   操作按钮集合
+   */
+  const renderActions = (row: DashboardRow): React.ReactNode => {
+    const actioning = actioningTaskNos.includes(row.task_no);
+    const canRetry = RETRYABLE_STATUSES.includes(row.status);
+    const isFailed = row.status === TASK_STATUS.FAILED;
+    const isBlockedRow = row.status === TASK_STATUS.BLOCKED;
+    // 重新上传权限：执行失败 或 已阻塞 的任务均可替换文件
+    //（阻塞任务往往因文件内容缺陷被规则引擎拦截，重跑无效，需上传修正版）；
+    // 仅提交经办人 / 管理员可操作，审查员不可替换原文件（权责分离）
+    const canReplace =
+      (isFailed || isBlockedRow) &&
+      (user?.role === 'admin' ||
+        (row.created_by && row.created_by === user?.username));
+
+    return (
+      <Space size={4} wrap>
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: '0 4px' }}
+          onClick={() => openWorkbench(row.task_no)}
+        >
+          审查
+        </Button>
+        {canRetry && (
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: '0 4px' }}
+            loading={actioning}
+            icon={<SyncOutlined />}
+            onClick={() => handleRetry(row)}
+          >
+            {row.status === TASK_STATUS.BLOCKED ? '重跑' : '重试'}
+          </Button>
+        )}
+        {canReplace && (
+          <Upload
+            showUploadList={false}
+            accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.tif,.tiff,.bmp"
+            beforeUpload={(file) => {
+              // 拦截自动上传，改由 replaceFile 走业务接口替换文件
+              handleReplaceFile(row, file as unknown as File);
+              return false;
+            }}
+          >
+            <Button
+              type="link"
+              size="small"
+              style={{ padding: '0 4px' }}
+              loading={actioning}
+            >
+              重新上传
+            </Button>
+          </Upload>
+        )}
+      </Space>
+    );
   };
 
   // ---------------- 表格列定义 ----------------
@@ -502,64 +574,7 @@ export default function DashboardPage(): React.ReactElement {
       key: 'action',
       width: 230,
       fixed: 'right',
-      render: (_value, row) => {
-        const actioning = actioningTaskNos.includes(row.task_no);
-        const canRetry = RETRYABLE_STATUSES.includes(row.status);
-        const isFailed = row.status === TASK_STATUS.FAILED;
-        const isBlockedRow = row.status === TASK_STATUS.BLOCKED;
-        // 重新上传权限：执行失败 或 已阻塞 的任务均可替换文件
-        //（阻塞任务往往因文件内容缺陷被规则引擎拦截，重跑无效，需上传修正版）；
-        // 仅提交经办人 / 管理员可操作，审查员不可替换原文件（权责分离）
-        const canReplace =
-          (isFailed || isBlockedRow) &&
-          (user?.role === 'admin' ||
-            (row.created_by && row.created_by === user?.username));
-
-        return (
-          <Space size={4} wrap>
-            <Button
-              type="link"
-              size="small"
-              style={{ padding: '0 4px' }}
-              onClick={() => openWorkbench(row.task_no)}
-            >
-              审查
-            </Button>
-            {canRetry && (
-              <Button
-                type="link"
-                size="small"
-                style={{ padding: '0 4px' }}
-                loading={actioning}
-                icon={<SyncOutlined />}
-                onClick={() => handleRetry(row)}
-              >
-                {row.status === TASK_STATUS.BLOCKED ? '重跑' : '重试'}
-              </Button>
-            )}
-            {canReplace && (
-              <Upload
-                showUploadList={false}
-                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.tif,.tiff,.bmp"
-                beforeUpload={(file) => {
-                  // 拦截自动上传，改由 replaceFile 走业务接口替换文件
-                  handleReplaceFile(row, file as unknown as File);
-                  return false;
-                }}
-              >
-                <Button
-                  type="link"
-                  size="small"
-                  style={{ padding: '0 4px' }}
-                  loading={actioning}
-                >
-                  重新上传
-                </Button>
-              </Upload>
-            )}
-          </Space>
-        );
-      },
+      render: (_value, row) => renderActions(row),
     },
   ];
 
@@ -787,8 +802,137 @@ export default function DashboardPage(): React.ReactElement {
       </Card>
 
       {/* ================= 任务列表 ================= */}
-      <Card size="small" styles={{ body: { padding: 0 } }}>
-        <Table<DashboardRow>
+      <Card
+        size="small"
+        styles={{ body: { padding: isMobile ? 12 : 0 } }}
+      >
+        {/* ---------------- 移动端：卡片式列表（完整信息，免横向滚动） ---------------- */}
+        {isMobile && (
+          <>
+            {loading && (
+              <div style={{ textAlign: 'center', padding: 24 }}>
+                <Spin />
+              </div>
+            )}
+            {!loading && displayedRows.length === 0 && (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  filters.keyword ||
+                  filters.status ||
+                  filters.riskLevel ||
+                  filters.contractType ||
+                  filters.failureType ||
+                  quickFilter !== 'all'
+                    ? '没有符合筛选条件的合同'
+                    : '暂无待审合同，点击右上角上传送审'
+                }
+                style={{ padding: '24px 0' }}
+              />
+            )}
+            {displayedRows.map((row) => {
+              const isFailed = row.status === TASK_STATUS.FAILED;
+              return (
+                <Card
+                  key={row.task_no}
+                  size="small"
+                  style={{
+                    marginBottom: 8,
+                    ...(isFailed
+                      ? { borderColor: '#ffccc7', background: '#fff1f0' }
+                      : {}),
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      {/* 名称与编号：完整展示，长名称自动折行 */}
+                      <div style={{ wordBreak: 'break-all' }}>
+                        <Text strong style={{ fontSize: 14 }}>
+                          {row.contract_title}
+                        </Text>
+                      </div>
+                      <Text
+                        type="secondary"
+                        style={{ fontSize: 11, wordBreak: 'break-all' }}
+                      >
+                        {row.task_no}
+                      </Text>
+                      <div style={{ marginTop: 6 }}>
+                        <Badge
+                          status={TASK_STATUS_BADGE[row.status] ?? 'default'}
+                          text={taskStatusLabel(row.status)}
+                        />
+                      </div>
+                      {isFailed && row.failure_reason && (
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: '#cf1322',
+                            marginTop: 4,
+                          }}
+                        >
+                          {row.failure_reason}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                      {row.risk_level && (
+                        <Tag
+                          color={RISK_LEVEL_TAG_COLOR[row.risk_level]}
+                          style={{ margin: 0, fontSize: 11 }}
+                        >
+                          {riskLevelLabel(row.risk_level)}
+                        </Tag>
+                      )}
+                      <Text
+                        type="secondary"
+                        style={{
+                          display: 'block',
+                          fontSize: 11,
+                          marginTop: 6,
+                        }}
+                      >
+                        {formatTime(row.created_at, 'MM-DD HH:mm')}
+                      </Text>
+                    </div>
+                  </div>
+                  {/* 操作按钮区：与桌面表格操作列完全同源 */}
+                  <div
+                    style={{
+                      marginTop: 8,
+                      paddingTop: 8,
+                      borderTop: '1px solid #f5f5f5',
+                    }}
+                  >
+                    {renderActions(row)}
+                  </div>
+                </Card>
+              );
+            })}
+            <Pagination
+              current={page}
+              pageSize={pageSize}
+              total={total}
+              size="small"
+              style={{ textAlign: 'center', marginTop: 8 }}
+              showTotal={(count) => `共 ${count} 条`}
+              onChange={(nextPage, nextPageSize) =>
+                setPage(nextPage, nextPageSize)
+              }
+            />
+          </>
+        )}
+
+        {/* ---------------- 桌面端：表格 ---------------- */}
+        {!isMobile && (
+          <>
+          <Table<DashboardRow>
           rowKey="task_no"
           columns={columns}
           dataSource={displayedRows}
@@ -833,7 +977,7 @@ export default function DashboardPage(): React.ReactElement {
           }}
         />
 
-        {/* ---------------- 全选辅助条 ---------------- */}
+        {/* ---------------- 全选辅助条（仅桌面端） ---------------- */}
         {displayedRows.length > 0 && (
           <div
             style={{
@@ -864,6 +1008,8 @@ export default function DashboardPage(): React.ReactElement {
               {retryableTaskNos.length} 条
             </Text>
           </div>
+        )}
+          </>
         )}
       </Card>
 

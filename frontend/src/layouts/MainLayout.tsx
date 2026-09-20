@@ -124,6 +124,8 @@ export default function MainLayout(): React.ReactElement {
   const [drawerOpen, setDrawerOpen] = useState(false);
   /** 当前视口是否处于手机尺寸 */
   const { isMobile } = useResponsive();
+  /** 桌面端侧边栏折叠状态（收起后内容区更宽，便于宽表格查看） */
+  const [siderCollapsed, setSiderCollapsed] = useState(false);
 
   /**
    * 按角色过滤后的可见导航项
@@ -235,15 +237,19 @@ export default function MainLayout(): React.ReactElement {
         display: 'flex',
         alignItems: 'center',
         gap: 10,
-        padding: '0 20px',
+        padding: siderCollapsed ? '0 22px' : '0 20px',
         color: '#fff',
+        overflow: 'hidden',
+        whiteSpace: 'nowrap',
       }}
     >
       <AuditOutlined style={{ fontSize: 20 }} />
-      <div style={{ lineHeight: 1.2 }}>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>明契智审</div>
-        <div style={{ fontSize: 11, opacity: 0.55 }}>Contract Review</div>
-      </div>
+      {!siderCollapsed && (
+        <div style={{ lineHeight: 1.2 }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>明契智审</div>
+          <div style={{ fontSize: 11, opacity: 0.55 }}>Contract Review</div>
+        </div>
+      )}
     </div>
   );
 
@@ -276,12 +282,15 @@ export default function MainLayout(): React.ReactElement {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      {/* ---------------- 桌面端：左侧固定导航 ---------------- */}
+      {/* ---------------- 桌面端：左侧可折叠导航 ---------------- */}
       {!isMobile && (
         <Sider
           theme="dark"
           width={224}
-          style={{ position: 'sticky', top: 0, height: '100vh' }}
+          collapsible
+          collapsed={siderCollapsed}
+          onCollapse={setSiderCollapsed}
+          style={{ position: 'sticky', top: 0, height: '100vh', zIndex: 20 }}
         >
           {renderBrand()}
           {renderNavMenu()}

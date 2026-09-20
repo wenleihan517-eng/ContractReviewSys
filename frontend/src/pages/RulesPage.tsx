@@ -150,6 +150,13 @@ export default function RulesPage(): React.ReactElement {
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   /** 条款库条款类型筛选 */
   const [clauseTypeFilter, setClauseTypeFilter] = useState<string | undefined>();
+  /**
+   * 统计卡筛选维度（2026-09-20：点击统计卡切入对应筛选）
+   * null=全部；enabled/disabled=启用状态；fatal/major=严重级别
+   */
+  const [statCardFilter, setStatCardFilter] = useState<
+    'enabled' | 'disabled' | 'fatal' | 'major' | null
+  >(null);
 
   // ---------------- 首屏加载 ----------------
   useEffect(() => {
@@ -184,7 +191,7 @@ export default function RulesPage(): React.ReactElement {
    * 分组下若无匹配项则整组隐藏，避免留下空分组造成干扰。
    */
   const filteredTree = useMemo<RuleTreeNode[]>(() => {
-    if (!treeKeyword.trim()) return ruleTree;
+    if (!treeKeyword.trim() && !statCardFilter) return ruleTree;
 
     const keyword = treeKeyword.trim().toLowerCase();
 
@@ -193,6 +200,19 @@ export default function RulesPage(): React.ReactElement {
         const matchedChildren = (group.children ?? []).filter((child) => {
           const rule = child.rule;
           if (!rule) return false;
+
+          // 统计卡维度过滤（点击卡片切入，再点一次取消）
+          if (statCardFilter === 'enabled' && !rule.enabled) return false;
+          if (statCardFilter === 'disabled' && rule.enabled) return false;
+          if (statCardFilter === 'fatal' && rule.severity !== 'fatal') {
+            return false;
+          }
+          if (statCardFilter === 'major' && rule.severity !== 'major') {
+            return false;
+          }
+
+          if (!keyword.trim()) return true;
+
           const haystack = [
             rule.rule_code,
             rule.rule_name,
@@ -207,7 +227,7 @@ export default function RulesPage(): React.ReactElement {
         return { ...group, children: matchedChildren };
       })
       .filter((group) => (group.children ?? []).length > 0);
-  }, [ruleTree, treeKeyword]);
+  }, [ruleTree, treeKeyword, statCardFilter]);
 
   /**
    * 转换为 Ant Design Tree 数据
@@ -549,21 +569,41 @@ export default function RulesPage(): React.ReactElement {
       {/* ================= 顶部统计 ================= */}
       <Row gutter={12}>
         <Col xs={12} sm={12} md={5}>
-          <Card size="small">
-            <div>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                规则总数
-              </Text>
+          <Card
+              size="small"
+              hoverable
+              onClick={() => setStatCardFilter(null)}
+              style={{
+                cursor: 'pointer',
+                ...(statCardFilter === null
+                  ? { borderColor: '#1677ff', borderWidth: 2 }
+                  : {}),
+              }}
+            >
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>规则总数</Text>
               <div style={{ fontSize: 22, fontWeight: 600 }}>{summary.total}</div>
             </div>
           </Card>
         </Col>
         <Col xs={12} sm={12} md={5}>
-          <Card size="small">
-            <div>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                已启用
-              </Text>
+          <Card
+              size="small"
+              hoverable
+              onClick={() =>
+                setStatCardFilter(
+                  statCardFilter === 'enabled' ? null : 'enabled',
+                )
+              }
+              style={{
+                cursor: 'pointer',
+                ...(statCardFilter === 'enabled'
+                  ? { borderColor: '#1677ff', borderWidth: 2 }
+                  : {}),
+              }}
+            >
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>已启用</Text>
               <div style={{ fontSize: 22, fontWeight: 600, color: '#52c41a' }}>
                 {summary.enabled}
               </div>
@@ -571,11 +611,23 @@ export default function RulesPage(): React.ReactElement {
           </Card>
         </Col>
         <Col xs={12} sm={12} md={5}>
-          <Card size="small">
-            <div>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                已禁用
-              </Text>
+          <Card
+              size="small"
+              hoverable
+              onClick={() =>
+                setStatCardFilter(
+                  statCardFilter === 'disabled' ? null : 'disabled',
+                )
+              }
+              style={{
+                cursor: 'pointer',
+                ...(statCardFilter === 'disabled'
+                  ? { borderColor: '#1677ff', borderWidth: 2 }
+                  : {}),
+              }}
+            >
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>已禁用</Text>
               <div
                 style={{
                   fontSize: 22,
@@ -589,11 +641,23 @@ export default function RulesPage(): React.ReactElement {
           </Card>
         </Col>
         <Col xs={12} sm={12} md={5}>
-          <Card size="small">
-            <div>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                致命级
-              </Text>
+          <Card
+              size="small"
+              hoverable
+              onClick={() =>
+                setStatCardFilter(
+                  statCardFilter === 'fatal' ? null : 'fatal',
+                )
+              }
+              style={{
+                cursor: 'pointer',
+                ...(statCardFilter === 'fatal'
+                  ? { borderColor: '#1677ff', borderWidth: 2 }
+                  : {}),
+              }}
+            >
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>致命级</Text>
               <div
                 style={{
                   fontSize: 22,
@@ -607,11 +671,23 @@ export default function RulesPage(): React.ReactElement {
           </Card>
         </Col>
         <Col xs={12} sm={12} md={4}>
-          <Card size="small">
-            <div>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                重大级
-              </Text>
+          <Card
+              size="small"
+              hoverable
+              onClick={() =>
+                setStatCardFilter(
+                  statCardFilter === 'major' ? null : 'major',
+                )
+              }
+              style={{
+                cursor: 'pointer',
+                ...(statCardFilter === 'major'
+                  ? { borderColor: '#1677ff', borderWidth: 2 }
+                  : {}),
+              }}
+            >
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>重大级</Text>
               <div style={{ fontSize: 22, fontWeight: 600 }}>
                 {summary.major}
               </div>
