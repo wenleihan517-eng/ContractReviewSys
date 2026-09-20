@@ -76,27 +76,36 @@ async def create_task(
     )
 
 
-@router.get("", summary="任务列表", description="分页查询任务列表，支持按状态/失败类型过滤与关键字搜索。")
+@router.get("", summary="任务列表", description="分页查询任务列表，支持按状态/失败类型过滤与关键字搜索。业务经办人仅可见本人提交的任务。")
 async def list_tasks(
     status: Optional[str] = Query(default=None, description="任务状态过滤"),
     failure_type: Optional[str] = Query(default=None, description="失败类型过滤（异常任务维度：ocr_timeout/file_format/file_corrupt/rule_engine_error 等）"),
     page: int = Query(default=1, ge=1, description="页码"),
     page_size: int = Query(default=20, ge=1, le=200, description="每页条数"),
     keyword: Optional[str] = Query(default=None, description="关键字"),
+    user: CurrentUser = Depends(get_current_user),
 ) -> ApiResponse:
     """
     任务列表
 
     入参：
         status / failure_type / page / page_size / keyword：查询参数
+        user: 当前登录用户
     出参：
         data: 分页结果（total / page / page_size / items）
+
+    权限说明（2026-09-20 修复"三角色看到相同列表"）：
+        业务经办人（business_user）按 PERM_TASK_VIEW_OWN 仅返回本人创建的任务；
+        法务审查人与系统管理员可查看全部任务。
     """
     from app.services import task_service
 
+    # 业务经办人强制按提交人过滤（服务端权威过滤，前端无法绕过）
+    owner_username = user.username if user.role == "business_user" else None
+
     items, total = await task_service.list_tasks(
         status=status, page=page, page_size=page_size, keyword=keyword,
-        failure_type=failure_type,
+        failure_type=failure_type, owner_username=owner_username,
     )
 
     item_list = [
@@ -156,15 +165,23 @@ async def approval_pending(
     )
 
 
-@router.get("/{task_no}", summary="任务详情", description="查询单个任务的完整状态信息。")
-async def get_task_detail(task_no: str) -> ApiResponse:
+@router.get("/{task_no}", summary="任务详情", description="查询单个任务的完整状态信息。业务经办人仅可查看本人提交的任务。")
+async def get_task_detail(
+    task_no: str,
+    user: CurrentUser = Depends(get_current_user),
+) -> ApiResponse:
     """
     任务详情
 
     入参：
         task_no: 任务编号（路径参数）
+        user: 当前登录用户
     出参：
         data: TaskDetailResponse
+
+    权限说明（2026-09-20 修复）：
+        业务经办人（business_user）仅可查看本人提交的任务（PERM_TASK_VIEW_OWN），
+        查看他人任务返回 403；法务审查人与系统管理员可查看全部。
     """
     from app.core.exceptions import BusinessException, ErrorCode
     from app.services import task_service
@@ -173,6 +190,14 @@ async def get_task_detail(task_no: str) -> ApiResponse:
     if task is None:
         raise BusinessException(
             code=ErrorCode.NOT_FOUND, message=f"任务不存在：{task_no}", http_status=404
+        )
+
+    # 业务经办人越权防护：只能查看本人提交的任务
+    if user.role == "business_user" and (task.created_by or "") != user.username:
+        raise BusinessException(
+            code=ErrorCode.APPROVAL_PERMISSION_DENIED,
+            message="无权查看该任务：业务经办人仅可查看本人提交的合同",
+            http_status=403,
         )
 
     detail = TaskDetailResponse(

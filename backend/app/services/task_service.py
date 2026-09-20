@@ -144,6 +144,7 @@ async def list_tasks(
     page_size: int = 20,
     keyword: Optional[str] = None,
     failure_type: Optional[str] = None,
+    owner_username: Optional[str] = None,
 ) -> Tuple[List[ReviewTask], int]:
     """
     分页查询任务列表
@@ -154,6 +155,9 @@ async def list_tasks(
         page_size: 每页条数
         keyword: 可选关键字（匹配 task_no / contract_title）
         failure_type: 可选，按失败类型过滤（异常任务筛选维度，2026-09-20 新增）
+        owner_username: 可选，按提交人过滤。业务经办人（business_user）只能
+            查看自己创建的任务（PERM_TASK_VIEW_OWN），调用方传入其用户名；
+            法务/管理员传 None 查看全部。
 
     返回：
         (任务列表, 总条数)
@@ -165,6 +169,8 @@ async def list_tasks(
         filter_dict["status"] = status
     if failure_type:
         filter_dict["failure_type"] = failure_type
+    if owner_username:
+        filter_dict["created_by"] = owner_username
     if keyword:
         filter_dict["$or"] = [
             {"task_no": {"$regex": keyword}},
