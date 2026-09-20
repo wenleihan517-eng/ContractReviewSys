@@ -256,14 +256,10 @@ async def preview_comment(task_id: str, body: CommentPreviewRequest) -> ApiRespo
 
     # 组装最小状态并生成评论
     from app.services import comment_service
-    from app.graph.state import ReviewTaskState
 
-    # 说明：state.task_id 须传真实 _id（comment_service 依此查询结论/风险，
-    # 入参可能是 task_no）
-    state = ReviewTaskState(
-        task_id=str(task.id), task_no=task.task_no,
-        risk_level=None, conclusion_text="",
-    )
+    # 【2026-09-20 修复】从数据库重建完整审查状态（结论 + 正式风险项）。
+    # 此前构造空壳 state 导致评论恒为"低风险 / 无风险项"，与真实审查结果不符。
+    state = await _rebuild_review_state(task)
     result = await comment_service.generate_comment_service(state)
 
     return success_response(
@@ -303,13 +299,11 @@ async def write_back_comment(task_id: str, body: CommentWriteBackRequest) -> Api
         )
 
     from app.services import comment_service
-    from app.graph.state import ReviewTaskState, WriteBackInfo, WriteBackState
+    from app.graph.state import WriteBackInfo, WriteBackState
 
-    # 组装状态：先生成评论，再执行回写（state.task_id 传真实 _id）
-    state = ReviewTaskState(
-        task_id=str(task.id), task_no=task.task_no,
-        risk_level=None, conclusion_text="",
-    )
+    # 【2026-09-20 修复】重建完整审查状态（结论 + 正式风险项），
+    # 保证回写评论内容与工作台展示的真实审查结果一致。
+    state = await _rebuild_review_state(task)
     comment_result = await comment_service.generate_comment_service(state)
 
     state.write_back_content = WriteBackInfo(
@@ -595,6 +589,81 @@ async def _load_conclusion_and_risks(task_id: str) -> tuple:
         risk_docs.append(doc)
 
     return conclusion_doc, risk_docs
+
+
+async def _rebuild_review_state(task) -> "ReviewTaskState":
+    """
+    按任务真实 _id 从数据库重建完整审查状态（结论 + 正式风险项）
+
+    【为什么需要（2026-09-20 修复）】
+        评论预览/回写端点此前构造的是空壳 state（risk_level=None、
+        conclusion_text=""、无 final_risk_items），而 generate_comment_service
+        只从 state 读取数据 —— 导致无论实际审查结论如何，评论恒为
+        「低风险 / 未发现规则引擎判定的风险项」，与工作台展示的
+        真实结果（如"严重风险 + 8 条缺失条款"）严重不符。
+
+        本函数复用报告端点的重建逻辑：从 cr_review_conclusion 与
+        cr_review_risk_hit 读回结论与规则引擎风险项，装配完整 state。
+
+    参数：
+        task: 审查任务模型（ReviewTask）
+
+    返回：
+        填充了审查结论与正式风险项的 ReviewTaskState
+    """
+    from app.graph.state import ReviewTaskState, RiskItem
+
+    conclusion_doc, risk_docs = await _load_conclusion_and_risks(str(task.id))
+
+    risk_items: List[RiskItem] = []
+    for doc in risk_docs:
+        try:
+            risk_items.append(RiskItem(
+                risk_id=doc.get("risk_id", ""),
+                rule_code=doc.get("rule_code"),
+                rule_name=doc.get("rule_name", "") or "",
+                clause_id=doc.get("clause_id"),
+                clause_type=doc.get("clause_type"),
+                evidence_text=doc.get("evidence_text", "") or "",
+                char_start=doc.get("char_start"),
+                char_end=doc.get("char_end"),
+                page_no=doc.get("page_no"),
+                risk_level=doc.get("risk_level") or "low",
+                decision=doc.get("decision", "") or "",
+                severity=doc.get("severity"),
+                suggestion_text=doc.get("suggestion_text", "") or "",
+                legal_basis=doc.get("legal_basis", "") or "",
+                reference_only=False,
+            ))
+        except Exception as exc:  # noqa: BLE001 - 单条异常不阻断整体
+            logger.warning("风险项转换失败，已跳过 | risk_id=%s | 异常=%s",
+                           doc.get("risk_id"), exc)
+
+    distribution = (conclusion_doc or {}).get("risk_distribution", {}) or {}
+    if not distribution and risk_items:
+        for item in risk_items:
+            distribution[item.risk_level] = distribution.get(item.risk_level, 0) + 1
+
+    return ReviewTaskState(
+        task_id=str(task.id),
+        task_no=task.task_no,
+        contract_id=task.contract_id,
+        # 合同业务字段：任务主档未存这些字段，尽量从主档自动识别值兜底
+        contract_title=getattr(task, "contract_title", "") or "",
+        contract_no=getattr(task, "contract_no", "") or task.task_no,
+        contract_type=getattr(task, "contract_type", "other") or "other",
+        contract_amount=getattr(task, "contract_amount", 0.0) or 0.0,
+        currency=getattr(task, "currency", "CNY") or "CNY",
+        # 审查结论（规则引擎产出，原样回填）
+        final_risk_items=risk_items,
+        risk_level=(conclusion_doc or {}).get("risk_level"),
+        is_blocked=bool((conclusion_doc or {}).get("is_blocked", False)),
+        risk_distribution=distribution,
+        conclusion_text=(conclusion_doc or {}).get("conclusion", "") or "",
+        conclusion_hash=(conclusion_doc or {}).get("conclusion_hash", "") or "",
+        rule_engine_version=(conclusion_doc or {}).get("engine_version", "") or "",
+        rule_evaluated=conclusion_doc is not None,
+    )
 
 
 def _assert_report_access(task, user: CurrentUser, action: str) -> None:
