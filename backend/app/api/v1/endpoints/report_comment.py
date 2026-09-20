@@ -114,7 +114,8 @@ async def generate_report(
     from app.graph.state import ReviewTaskState, RiskItem
 
     # 从数据库重建审查结论与风险项（保证报告与审查结果接口口径一致）
-    conclusion_doc, risk_docs = await _load_conclusion_and_risks(task_id)
+    # 说明：入参可能是 task_no，结论/风险集合以 _id 为键，须传真实 _id。
+    conclusion_doc, risk_docs = await _load_conclusion_and_risks(str(task.id))
 
     risk_items: List[RiskItem] = []
     for doc in risk_docs:
@@ -257,8 +258,10 @@ async def preview_comment(task_id: str, body: CommentPreviewRequest) -> ApiRespo
     from app.services import comment_service
     from app.graph.state import ReviewTaskState
 
+    # 说明：state.task_id 须传真实 _id（comment_service 依此查询结论/风险，
+    # 入参可能是 task_no）
     state = ReviewTaskState(
-        task_id=task_id, task_no=task.task_no,
+        task_id=str(task.id), task_no=task.task_no,
         risk_level=None, conclusion_text="",
     )
     result = await comment_service.generate_comment_service(state)
@@ -302,9 +305,9 @@ async def write_back_comment(task_id: str, body: CommentWriteBackRequest) -> Api
     from app.services import comment_service
     from app.graph.state import ReviewTaskState, WriteBackInfo, WriteBackState
 
-    # 组装状态：先生成评论，再执行回写
+    # 组装状态：先生成评论，再执行回写（state.task_id 传真实 _id）
     state = ReviewTaskState(
-        task_id=task_id, task_no=task.task_no,
+        task_id=str(task.id), task_no=task.task_no,
         risk_level=None, conclusion_text="",
     )
     comment_result = await comment_service.generate_comment_service(state)

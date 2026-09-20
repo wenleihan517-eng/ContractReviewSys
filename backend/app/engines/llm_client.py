@@ -295,6 +295,13 @@ class LLMClient:
 
         content = response.content.strip()
 
+        # 容错零：剥离推理模型的 <think>...</think> 思考段
+        # （DeepSeek-V4 等推理模型会先输出思考过程再给答案，
+        #   思考段内可能含有花括号，必须在 JSON 提取前移除）
+        content = re.sub(
+            r"<think>.*?</think>", "", content, flags=re.DOTALL
+        ).strip()
+
         # 容错一：剥离 ```json ... ``` 代码块包裹
         if content.startswith("```"):
             content = re.sub(r"^```(?:json)?\s*", "", content)

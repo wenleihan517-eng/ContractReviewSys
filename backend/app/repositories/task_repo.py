@@ -84,10 +84,17 @@ async def find_by_task_no(task_no: str) -> Optional[ReviewTask]:
 
 async def find_by_task_id(task_id: str) -> Optional[ReviewTask]:
     """
-    按任务 ID 查询任务
+    按任务 ID 查询任务（兼容任务编号 task_no 回退）
+
+    说明：
+        优先按 MongoDB _id（task_id）查询；入参不是合法 ObjectId
+        或按 _id 未命中时，回退按 task_no（如 T2026091922473083）查询。
+        【2026-09-19 修复】此前仅支持 _id，前端工作台以 task_no 调
+        解析/审查结果接口时恒 404，表现为"合同原文尚未解析完成、
+        风险 0 项"。
 
     参数：
-        task_id: 任务 ID（MongoDB _id）
+        task_id: 任务 ID（MongoDB _id）或任务编号（task_no）
 
     返回：
         ReviewTask 实例；不存在返回 None
@@ -95,10 +102,14 @@ async def find_by_task_id(task_id: str) -> Optional[ReviewTask]:
     from bson import ObjectId
 
     collection = _collection()
+    raw = None
     try:
         raw = await collection.find_one({"_id": ObjectId(task_id)})
-    except Exception:  # noqa: BLE001 - 非法 ObjectId 视为不存在
-        return None
+    except Exception:  # noqa: BLE001 - 非法 ObjectId 视为不存在，走编号回退
+        raw = None
+    if raw is None:
+        # 回退：按任务编号查询（task_no 上有唯一索引）
+        raw = await collection.find_one({"task_no": task_id})
     if raw is None:
         return None
     return _to_model(raw)

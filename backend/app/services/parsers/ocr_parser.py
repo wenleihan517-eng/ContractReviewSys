@@ -27,6 +27,7 @@ OCR 降级解析器
 import asyncio
 import io
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -612,6 +613,13 @@ def _recognize_online(
 
     if not isinstance(content, str) or not content.strip():
         return []
+
+    # ---------------- 输出清洗 ----------------
+    # PaddleOCR-VL 系列模型的输出内嵌 <|LOC_x|> 坐标标记（每行 8 个），
+    # 属于模型的版面定位输出，不属于识别文本，须全部剥离；
+    # 同时剥离推理模型可能输出的 <think>...</think> 段与行内多余空白。
+    content = re.sub(r"<\|LOC_\d+\|>", "", content)
+    content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
 
     confidence = float(settings.OCR_ONLINE_LINE_CONFIDENCE)
     items: List[Tuple[str, float, Tuple[float, float, float, float]]] = []

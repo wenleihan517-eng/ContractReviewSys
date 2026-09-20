@@ -86,12 +86,16 @@ async def review_result(task_id: str) -> ApiResponse:
             code=ErrorCode.NOT_FOUND, message=f"任务不存在：{task_id}", http_status=404
         )
 
+    # 统一取任务真实 _id：入参可能是 task_no（前端工作台以编号调用），
+    # 而结论/风险集合以 _id 为归属键，必须用 canonical_id 查询，否则查空。
+    canonical_id = str(task.id)
+
     # 审查结论从 cr_review_conclusion 集合读取（规则引擎产出）
     from app.constants import MongoCollection
     from app.storage.mongo_client import mongo_client
 
     collection = mongo_client.get_collection(MongoCollection.REVIEW_CONCLUSION)
-    raw = await collection.find_one({"task_id": task_id})
+    raw = await collection.find_one({"task_id": canonical_id})
 
     rule_evaluated = raw is not None
     risk_level = raw.get("risk_level") if raw else None
@@ -105,7 +109,7 @@ async def review_result(task_id: str) -> ApiResponse:
     risk_collection = mongo_client.get_collection(MongoCollection.REVIEW_RISK_HIT)
     risk_items = []
     cursor = risk_collection.find(
-        {"task_id": task_id, "hit_source": "rule_engine"}
+        {"task_id": canonical_id, "hit_source": "rule_engine"}
     ).sort("risk_id", 1)
     async for item in cursor:
         risk_items.append(RiskItemResponse(
@@ -125,7 +129,7 @@ async def review_result(task_id: str) -> ApiResponse:
         ).model_dump())
 
     result = ReviewResultResponse(
-        task_id=task_id,
+        task_id=canonical_id,
         rule_evaluated=rule_evaluated,
         risk_level=risk_level,
         is_blocked=is_blocked,

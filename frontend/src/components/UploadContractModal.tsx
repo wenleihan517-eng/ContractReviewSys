@@ -43,6 +43,7 @@ import {
   SCANNED_IMAGE_EXTS,
 } from '@/constants';
 import { formatFileSize } from '@/utils';
+import { useResponsive } from '@/hooks/useResponsive';
 // 紧凑拖拽区样式：antd Dragger 默认 height:100% 高度链会被弹窗父容器意外拉伸，
 // 此处以 height:auto 打断并压缩图标与内边距，仅作用于 rootClassName 标记的实例。
 import '@/styles/upload-compact.css';
@@ -71,6 +72,8 @@ export default function UploadContractModal({
   onSuccess,
 }: UploadContractModalProps): React.ReactElement {
   const { message } = App.useApp();
+  // 移动端（<768px）弹窗宽度自适应为 92vw，避免固定 720px 溢出小屏
+  const { isMobile } = useResponsive();
 
   /** 已选文件列表（Ant Design Upload 受控模式，始终只保留 1 个文件） */
   const [fileList, setFileList] = useState<UploadFile[]>([]);
@@ -238,7 +241,7 @@ export default function UploadContractModal({
     <Modal
       title="手动上传合同送审"
       open={open}
-      width={720}
+      width={isMobile ? '92vw' : 720}
       onCancel={handleClose}
       maskClosable={false}
       footer={
