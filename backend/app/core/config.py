@@ -650,10 +650,6 @@ class Settings(BaseSettings):
         default="1623084893@qq.com",
         description="审查员 QQ 邮箱：仅接收异常任务通知",
     )
-    NOTIFY_GROUP_EMAIL: str = Field(
-        default="1070152604@qq.com",
-        description="工作群 QQ 邮箱：仅推送大批量 OCR 失败、系统故障等高优先级异常",
-    )
     APPROVAL_TIMEOUT_SECONDS: float = Field(
         default=30.0,
         gt=0.0,

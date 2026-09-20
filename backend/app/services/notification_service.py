@@ -9,11 +9,10 @@
 
 【分级推送规则（与需求一一对应，勿改语义）】
     接收人员（QQ 邮箱）：经办员 2241071024@qq.com ｜ 管理员 2584076700@qq.com
-    ｜ 审查员 1623084893@qq.com ｜ 工作群 1070152604@qq.com
+    ｜ 审查员 1623084893@qq.com
     - 经办员：接收本人提交合同的【审查成功、审查失败】全部通知
     - 审查员：仅接收异常任务通知
     - 管理员：仅接收执行失败、系统级异常通知（普通合同审查完成不推送）
-    - 工作群：仅推送大批量 OCR 失败、系统故障等高优先级异常
 """
 
 import asyncio
@@ -176,7 +175,6 @@ async def notify_task_failed(
         - 经办员（本人）：失败通知全收
         - 审查员：异常通知收
         - 管理员：失败通知收
-        - 工作群：失败属于异常事件，推送（大批量判定交由系统告警，见 notify_system_alert）
     """
     text = _build_failed_text(task_no, reason, advice)
     title = "审查失败提醒"
@@ -220,7 +218,7 @@ async def notify_task_completed(
 
     分级规则落地点：
         - 经办员（本人）：完成通知收
-        - 管理员 / 审查员 / 工作群：普通完成【不推送】（需求明确）
+        - 管理员 / 审查员：普通完成【不推送】（需求明确）
     """
     text = _build_completed_text(task_no, risk_level, risk_count)
     title = "审查完成提醒"
@@ -233,7 +231,7 @@ async def notify_task_completed(
         recipient_role="business_user", recipient_username=operator_username,
     )
 
-    # QQ：仅经办员（管理员/审查员/工作群按需求不推送普通完成）
+    # 邮件：仅经办员（管理员/审查员按需求不推送普通完成）
     status = await _send_email(text, [settings.NOTIFY_OPERATOR_EMAIL])
     logger.info("任务完成通知完成 | 任务=%s | 邮件=%s", task_no, status)
 
@@ -242,7 +240,7 @@ async def notify_system_alert(message: str, *, critical: bool = True) -> None:
     """
     系统级异常通知（如批量 OCR 失败、服务故障）
 
-    分级规则落地点：管理员 + 工作群（高优先级异常才推群）
+    分级规则落地点：管理员
     """
     text = f"【明契智审 - 系统告警】\n{message}\n请管理员尽快登录系统排查。"
     await _insert_notification(
@@ -252,7 +250,5 @@ async def notify_system_alert(message: str, *, critical: bool = True) -> None:
         recipient_role="admin",
     )
     targets = [settings.NOTIFY_ADMIN_EMAIL]
-    if critical:
-        targets.append(settings.NOTIFY_GROUP_EMAIL)
     status = await _send_email(text, targets)
     logger.info("系统告警通知完成 | 邮件=%s | 内容=%s", status, message[:100])
