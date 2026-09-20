@@ -143,6 +143,7 @@ async def list_tasks(
     page: int = 1,
     page_size: int = 20,
     keyword: Optional[str] = None,
+    failure_type: Optional[str] = None,
 ) -> Tuple[List[ReviewTask], int]:
     """
     分页查询任务列表
@@ -152,6 +153,7 @@ async def list_tasks(
         page: 页码
         page_size: 每页条数
         keyword: 可选关键字（匹配 task_no / contract_title）
+        failure_type: 可选，按失败类型过滤（异常任务筛选维度，2026-09-20 新增）
 
     返回：
         (任务列表, 总条数)
@@ -161,9 +163,12 @@ async def list_tasks(
     filter_dict: Dict[str, Any] = {}
     if status:
         filter_dict["status"] = status
+    if failure_type:
+        filter_dict["failure_type"] = failure_type
     if keyword:
         filter_dict["$or"] = [
             {"task_no": {"$regex": keyword}},
+            {"contract_title": {"$regex": keyword}},
             {"contract_id": {"$regex": keyword}},
         ]
 
@@ -305,3 +310,54 @@ async def list_approval_pending(page: int = 1, page_size: int = 20) -> Tuple[Lis
         skip=skip,
         limit=page_size,
     )
+
+
+# ======================================================================
+# 任务处理操作留痕（2026-09-20 数据与流程闭环）
+# ======================================================================
+async def record_task_operation(
+    task_no: str,
+    operator: str,
+    action: str,
+    result: str,
+    detail: str = "",
+    failure_type: str = "",
+) -> None:
+    """
+    记录一次任务处理操作（重试 / 重新上传 / 自动重试 / 失败通知）
+
+    说明：
+        每次重试、重新上传均留存操作记录（操作人 / 操作时间 / 处理结果），
+        形成"异常 -> 处置 -> 结果"的闭环证据链。写入失败仅记录日志，
+        绝不阻断主流程（留痕是旁路能力）。
+
+    参数：
+        task_no: 任务编号
+        operator: 操作人（用户名；系统自动动作用 system）
+        action: 操作类型 retry / replace_file / auto_retry / notify
+        result: 处理结果 success / failed / accepted
+        detail: 补充说明（如失败原因、替换后的文件名）
+        failure_type: 关联的失败类型（重试场景下为被处置的失败）
+    """
+    from app.constants import MongoCollection
+    from app.storage.mongo_client import mongo_client
+
+    try:
+        collection = mongo_client.get_collection(MongoCollection.TASK_OPERATION_LOG)
+        await collection.insert_one(
+            {
+                "task_no": task_no,
+                "operator": operator,
+                "action": action,
+                "result": result,
+                "detail": detail,
+                "failure_type": failure_type,
+                "created_at": datetime.now(),
+            }
+        )
+        logger.info(
+            "任务操作留痕 | 任务=%s | 操作人=%s | 动作=%s | 结果=%s",
+            task_no, operator, action, result,
+        )
+    except Exception as exc:  # noqa: BLE001 - 留痕失败不阻断主流程
+        logger.error("任务操作留痕写入失败 | 任务=%s | 异常=%s", task_no, exc)

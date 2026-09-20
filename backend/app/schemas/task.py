@@ -95,6 +95,10 @@ class TaskListItem(BaseModel):
     progress: int = Field(default=0, description="进度百分比")
     blocked_reason: Optional[str] = Field(default=None, description="阻塞原因")
     created_at: Optional[datetime] = Field(default=None, description="创建时间")
+    # 失败分类（2026-09-20 交互优化：失败行标红悬浮 + 异常筛选）
+    failure_type: Optional[str] = Field(default=None, description="失败类型（FailureType）")
+    failure_reason: Optional[str] = Field(default=None, description="失败原因摘要（脱敏）")
+    created_by: str = Field(default="", description="提交经办人用户名（重新上传权限判定）")
 
 
 class TaskDetailResponse(BaseModel):
@@ -132,6 +136,9 @@ class TaskDetailResponse(BaseModel):
     is_blocked: bool = Field(default=False, description="是否阻塞")
     created_at: Optional[datetime] = Field(default=None, description="创建时间")
     updated_at: Optional[datetime] = Field(default=None, description="更新时间")
+    failure_type: Optional[str] = Field(default=None, description="失败类型（FailureType）")
+    failure_reason: Optional[str] = Field(default=None, description="失败原因摘要（脱敏）")
+    created_by: str = Field(default="", description="提交经办人用户名")
 
 
 # ======================================================================

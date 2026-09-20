@@ -37,6 +37,7 @@ import type {
   LoginResponse,
   LogoutRequest,
   LogoutResponse,
+  NotificationItem,
   PageResult,
   ParseResultResponse,
   ParseTriggerRequest,
@@ -64,6 +65,7 @@ import type {
   TaskListItem,
   TaskListQuery,
   TaskRetryResponse,
+  UnreadCountResponse,
   UploadFileResponse,
   UserInfo,
 } from '@/types';
@@ -132,6 +134,23 @@ export const taskApi = {
     return post<TaskRetryResponse>(
       `/tasks/${encodeURIComponent(taskNo)}/retry`,
       { task_no: taskNo },
+    );
+  },
+
+  /**
+   * 重新上传替换合同文件（仅提交经办人 / 管理员可用）
+   *
+   * 说明：
+   *   替换原文件后重新提交审查，后端会校验权限（审查员不可替换），
+   *   并自动重新触发解析与审查。返回 { task_no, accepted, message }。
+   */
+  replaceFile(
+    taskNo: string,
+    file: File,
+  ): Promise<{ task_no: string; accepted: boolean; message: string }> {
+    return upload<{ task_no: string; accepted: boolean; message: string }>(
+      `/tasks/${encodeURIComponent(taskNo)}/replace-file`,
+      file,
     );
   },
 
@@ -771,5 +790,44 @@ export const authApi = {
    */
   changePassword(body: ChangePasswordRequest): Promise<Record<string, never>> {
     return post<Record<string, never>>('/auth/change-password', body);
+  },
+};
+
+// ======================================================================
+// 八、站内通知（/notifications 消息中心）
+// ======================================================================
+
+/** 通知接口集合 */
+export const notificationApi = {
+  /**
+   * 查询当前用户可见通知列表
+   */
+  list(
+    page = 1,
+    pageSize = 20,
+    unreadOnly = false,
+  ): Promise<PageResult<NotificationItem>> {
+    return get<PageResult<NotificationItem>>('/notifications', {
+      page,
+      page_size: pageSize,
+      unread_only: unreadOnly,
+    });
+  },
+
+  /** 未读数量（消息中心小红点） */
+  unreadCount(): Promise<UnreadCountResponse> {
+    return get<UnreadCountResponse>('/notifications/unread-count');
+  },
+
+  /** 标记单条已读 */
+  markRead(notifyId: string): Promise<{ notify_id: string }> {
+    return post<{ notify_id: string }>(
+      '/notifications/' + encodeURIComponent(notifyId) + '/read',
+    );
+  },
+
+  /** 全部标记已读 */
+  markAllRead(): Promise<{ updated: number }> {
+    return post<{ updated: number }>('/notifications/read-all');
   },
 };

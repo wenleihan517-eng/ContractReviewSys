@@ -387,6 +387,52 @@ class MongoCollection:
     FILE_OBJECT = "cr_file_object"               # 文件对象元数据
     SYS_CONFIG = "cr_sys_config"                 # 系统配置（运行期可改项）
     USER = "cr_user"                             # 系统用户（登录鉴权的账号主档）
+    NOTIFICATION = "cr_notification"             # 站内通知（消息中心）
+    TASK_OPERATION_LOG = "cr_task_operation_log"  # 任务处理操作记录（重试/重新上传留痕）
+
+
+class FailureType(str, Enum):
+    """
+    任务执行失败类型（2026-09-20 交互优化新增）
+
+    【为什么分类】
+        不同失败类型的处置方式不同：
+            - 瞬时异常（ocr_timeout / network_error）：可一键重试，
+              且后台自动重试 1 次
+            - 文件类异常（file_corrupt / file_format）：重试无意义，
+              必须重新上传替换原文件
+            - 引擎异常（rule_engine_error / other）：人工排查后重试
+        分类随失败落库（ReviewTask.failure_type），供大盘悬浮提示、
+        失败类型筛选与自动重试决策使用。
+    """
+
+    OCR_TIMEOUT = "ocr_timeout"              # OCR 识别接口调用超时
+    FILE_FORMAT = "file_format"              # 文件格式不支持
+    FILE_CORRUPT = "file_corrupt"            # 文件损坏 / 内容为空 / 加密
+    RULE_ENGINE_ERROR = "rule_engine_error"  # 规则引擎执行异常
+    NETWORK_ERROR = "network_error"          # 网络抖动 / 上游服务不可达
+    PARSE_FAILED = "parse_failed"            # 其他解析失败
+    OTHER = "other"                          # 未归类异常
+
+    @classmethod
+    def transient_types(cls) -> "set[str]":
+        """瞬时异常集合：可自动重试 / 一键重试即可恢复"""
+        return {cls.OCR_TIMEOUT.value, cls.NETWORK_ERROR.value}
+
+
+class NotificationType(str, Enum):
+    """站内/QQ 通知类型（消息分级推送）"""
+
+    TASK_COMPLETED = "task_completed"  # 审查完成（含命中风险数）
+    TASK_FAILED = "task_failed"        # 审查/解析执行失败
+    SYSTEM_ALERT = "system_alert"      # 系统级异常（批量故障等）
+
+
+class NotificationLevel(str, Enum):
+    """通知级别：critical 标红高优先级，info 普通展示"""
+
+    INFO = "info"
+    CRITICAL = "critical"
 
 
 # ======================================================================

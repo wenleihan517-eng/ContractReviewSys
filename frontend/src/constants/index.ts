@@ -632,3 +632,19 @@ export const NAV_REASON = {
 } as const;
 
 export type NavReason = (typeof NAV_REASON)[keyof typeof NAV_REASON];
+
+/** 失败类型标签（异常任务筛选维度与悬浮提示） */
+export const FAILURE_TYPE_LABEL: Record<string, string> = {
+  ocr_timeout: 'OCR识别超时',
+  file_format: '文件格式错误',
+  file_corrupt: '文件损坏',
+  rule_engine_error: '规则引擎报错',
+  network_error: '网络异常',
+  parse_failed: '解析失败',
+  other: '其他异常',
+};
+
+/** 失败类型筛选选项（大盘异常任务维度） */
+export const FAILURE_TYPE_OPTIONS = Object.entries(FAILURE_TYPE_LABEL).map(
+  ([value, label]) => ({ value, label }),
+);

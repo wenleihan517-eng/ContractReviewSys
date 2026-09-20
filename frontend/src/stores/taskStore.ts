@@ -49,6 +49,8 @@ export interface DashboardFilters {
   riskLevel: RiskLevel | null;
   /** 合同类型过滤 */
   contractType: string | null;
+  /** 失败类型过滤（异常任务维度，2026-09-20 新增） */
+  failureType: string | null;
 }
 
 /** 筛选条件初始值 */
@@ -57,6 +59,7 @@ const INITIAL_FILTERS: DashboardFilters = {
   status: null,
   riskLevel: null,
   contractType: null,
+  failureType: null,
 };
 
 // ======================================================================
@@ -107,6 +110,11 @@ interface TaskState {
   setSelected: (taskNos: string[]) => void;
   /** 重试指定任务（失败或阻塞） */
   retryTask: (taskNo: string) => Promise<void>;
+  /** 重新上传替换合同文件（仅提交经办人/管理员） */
+  replaceFile: (
+    taskNo: string,
+    file: File,
+  ) => Promise<{ task_no: string; accepted: boolean; message: string }>;
   /** 处理阻塞任务 */
   resolveBlockedTask: (
     taskNo: string,
@@ -158,6 +166,9 @@ function mergeRow(
     progress: number;
     blocked_reason: string | null;
     created_at: string | null;
+    failure_type?: string | null;
+    failure_reason?: string | null;
+    created_by?: string;
   },
   detail: TaskDetailResponse | null,
 ): DashboardRow {
@@ -187,6 +198,9 @@ function mergeRow(
     max_retry: detail?.max_retry ?? 3,
     write_back_status: detail?.write_back_status ?? 'not_written',
     created_at: listItem.created_at ?? detail?.created_at ?? null,
+    failure_type: listItem.failure_type ?? detail?.failure_type ?? null,
+    failure_reason: listItem.failure_reason ?? detail?.failure_reason ?? null,
+    created_by: listItem.created_by ?? '',
   };
 }
 
@@ -299,6 +313,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         page: fetchPage,
         page_size: fetchPageSize,
         keyword: filters.keyword || undefined,
+        failure_type: filters.failureType ?? undefined,
       });
 
       if (listResult.items.length === 0) {
@@ -383,6 +398,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       await taskApi.retry(taskNo);
       // 重试后静默刷新，让进度条立刻反映新状态
       await get().loadTasks({ silent: true });
+    } finally {
+      set((state) => ({
+        actioningTaskNos: state.actioningTaskNos.filter(
+          (item) => item !== taskNo,
+        ),
+      }));
+    }
+  },
+
+  // ---------------- 重新上传替换合同文件 ----------------
+  replaceFile: async (taskNo, file) => {
+    set((state) => ({
+      actioningTaskNos: [...state.actioningTaskNos, taskNo],
+    }));
+
+    try {
+      const result = await taskApi.replaceFile(taskNo, file);
+      if (!result.accepted) {
+        // 文件替换成功但重新解析未受理：抛出以提示，但不阻断刷新
+        throw new ApiError(50007, result.message || '重新解析未受理', 200);
+      }
+      await get().loadTasks({ silent: true });
+      return result;
     } finally {
       set((state) => ({
         actioningTaskNos: state.actioningTaskNos.filter(
@@ -477,6 +515,7 @@ export function selectDashboardSummary(rows: DashboardRow[]): {
   critical: number;
   high: number;
   completed: number;
+  failed: number;
 } {
   return {
     total: rows.length,
@@ -484,6 +523,7 @@ export function selectDashboardSummary(rows: DashboardRow[]): {
     critical: rows.filter((row) => row.risk_level === 'critical').length,
     high: rows.filter((row) => row.risk_level === 'high').length,
     completed: rows.filter((row) => row.status === TASK_STATUS.COMPLETED).length,
+    failed: rows.filter((row) => row.status === TASK_STATUS.FAILED).length,
   };
 }
 

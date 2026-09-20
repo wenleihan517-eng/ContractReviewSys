@@ -42,6 +42,7 @@ import {
   Tag,
   Tooltip,
   Typography,
+  Upload,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -59,6 +60,8 @@ import {
   BLOCKED_REASON_LABEL,
   BUSINESS_TYPE_LABEL,
   CONTRACT_TYPE_OPTIONS,
+  FAILURE_TYPE_LABEL,
+  FAILURE_TYPE_OPTIONS,
   PAGINATION,
   RISK_LEVEL_OPTIONS,
   RISK_LEVEL_TAG_COLOR,
@@ -68,6 +71,7 @@ import {
   TASK_STATUS_OPTIONS,
   type TaskStatus,
 } from '@/constants';
+import { useAuthStore } from '@/stores/authStore';
 import {
   selectDashboardSummary,
   useTaskStore,
@@ -104,6 +108,7 @@ const QUICK_FILTERS = [
   { label: '已阻塞', value: 'blocked' },
   { label: '高风险及以上', value: 'high' },
   { label: '已完成', value: 'completed' },
+  { label: '异常任务', value: 'failed' },
 ] as const;
 
 type QuickFilter = (typeof QUICK_FILTERS)[number]['value'];
@@ -129,8 +134,10 @@ export default function DashboardPage(): React.ReactElement {
   const loadTasks = useTaskStore((state) => state.loadTasks);
   const setSelected = useTaskStore((state) => state.setSelected);
   const retryTask = useTaskStore((state) => state.retryTask);
+  const replaceFile = useTaskStore((state) => state.replaceFile);
   const batchRetry = useTaskStore((state) => state.batchRetry);
   const stopPolling = useTaskStore((state) => state.stopPolling);
+  const user = useAuthStore((state) => state.user);
 
   // ---------------- 本地 UI 状态 ----------------
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -171,6 +178,9 @@ export default function DashboardPage(): React.ReactElement {
     }
     if (quickFilter === 'completed') {
       return rows.filter((row) => row.status === TASK_STATUS.COMPLETED);
+    }
+    if (quickFilter === 'failed') {
+      return rows.filter((row) => row.status === TASK_STATUS.FAILED);
     }
     return rows;
   }, [rows, quickFilter]);
@@ -251,6 +261,18 @@ export default function DashboardPage(): React.ReactElement {
         message.success('任务已重新排队');
       } catch {
         message.error('重试失败，请稍后重试');
+      }
+    })();
+  };
+
+  /** 重新上传替换合同文件（仅失败任务，提交经办人/管理员） */
+  const handleReplaceFile = (row: DashboardRow, file: File): void => {
+    void (async () => {
+      try {
+        await replaceFile(row.task_no, file);
+        message.success('合同文件已替换并重新提交审查');
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : '重新上传失败，请重试');
       }
     })();
   };
@@ -356,13 +378,43 @@ export default function DashboardPage(): React.ReactElement {
       width: 150,
       render: (_value, row) => {
         const inProgress = TASK_STATUS_IN_PROGRESS.includes(row.status);
+        const isFailed = row.status === TASK_STATUS.FAILED;
+
+        // 失败态：标红 + 悬浮显示失败类型/原因与操作指引
+        const badge = (
+          <Badge
+            status={TASK_STATUS_BADGE[row.status] ?? 'default'}
+            text={
+              <span style={isFailed ? { color: '#cf1322', fontWeight: 600 } : undefined}>
+                {taskStatusLabel(row.status)}
+              </span>
+            }
+          />
+        );
 
         return (
           <div>
-            <Badge
-              status={TASK_STATUS_BADGE[row.status] ?? 'default'}
-              text={taskStatusLabel(row.status)}
-            />
+            {isFailed ? (
+              <Tooltip
+                placement="top"
+                title={
+                  <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                    <div>
+                      失败类型：
+                      {FAILURE_TYPE_LABEL[row.failure_type ?? 'other'] ?? row.failure_type}
+                    </div>
+                    <div>失败原因：{row.failure_reason ?? '未知'}</div>
+                    <div style={{ marginTop: 4, color: '#ffd591' }}>
+                      瞬时异常可直接一键重试；文件损坏请重新上传替换合同文件
+                    </div>
+                  </div>
+                }
+              >
+                {badge}
+              </Tooltip>
+            ) : (
+              badge
+            )}
             {/* 长任务实时进度条：仅在任务进行中时展示，避免静态任务干扰视觉 */}
             {inProgress && (
               <Progress
@@ -453,9 +505,14 @@ export default function DashboardPage(): React.ReactElement {
       render: (_value, row) => {
         const actioning = actioningTaskNos.includes(row.task_no);
         const canRetry = RETRYABLE_STATUSES.includes(row.status);
+        const isFailed = row.status === TASK_STATUS.FAILED;
+        // 重新上传权限：仅合同提交经办人 / 管理员；审查员不可替换原文件（权责分离）
+        const canReplace =
+          isFailed &&
+          (user?.role === 'admin' || (row.created_by && row.created_by === user?.username));
 
         return (
-          <Space size={4}>
+          <Space size={4} wrap>
             <Button
               type="link"
               size="small"
@@ -476,6 +533,26 @@ export default function DashboardPage(): React.ReactElement {
                 {row.status === TASK_STATUS.BLOCKED ? '重跑' : '重试'}
               </Button>
             )}
+            {canReplace && (
+              <Upload
+                showUploadList={false}
+                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.tif,.tiff,.bmp"
+                beforeUpload={(file) => {
+                  // 拦截自动上传，改由 replaceFile 走业务接口替换文件
+                  handleReplaceFile(row, file as unknown as File);
+                  return false;
+                }}
+              >
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: '0 4px' }}
+                  loading={actioning}
+                >
+                  重新上传
+                </Button>
+              </Upload>
+            )}
           </Space>
         );
       },
@@ -486,7 +563,7 @@ export default function DashboardPage(): React.ReactElement {
     <div>
       {/* ================= 顶部统计卡片 ================= */}
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col xs={12} sm={12} md={6}>
+        <Col xs={12} sm={8} md={8} lg={4}>
           <Card size="small" variant="outlined">
             <Statistic
               title="待审合同总数"
@@ -495,7 +572,7 @@ export default function DashboardPage(): React.ReactElement {
             />
           </Card>
         </Col>
-        <Col xs={12} sm={12} md={6}>
+        <Col xs={12} sm={8} md={8} lg={4}>
           <Card size="small" variant="outlined">
             <Statistic
               title="严重 / 高风险"
@@ -508,7 +585,7 @@ export default function DashboardPage(): React.ReactElement {
             />
           </Card>
         </Col>
-        <Col xs={12} sm={12} md={6}>
+        <Col xs={12} sm={8} md={8} lg={4}>
           <Card size="small" variant="outlined">
             <Statistic
               title="阻塞待处理"
@@ -520,7 +597,19 @@ export default function DashboardPage(): React.ReactElement {
             />
           </Card>
         </Col>
-        <Col xs={12} sm={12} md={6}>
+        <Col xs={12} sm={8} md={8} lg={4}>
+          <Card size="small" variant="outlined">
+            <Statistic
+              title="执行失败"
+              value={summary.failed}
+              valueStyle={{
+                fontSize: 24,
+                color: summary.failed > 0 ? '#cf1322' : undefined,
+              }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={8} lg={4}>
           <Card size="small" variant="outlined">
             <Statistic
               title="审查已完成"
@@ -597,6 +686,15 @@ export default function DashboardPage(): React.ReactElement {
               value={filters.contractType}
               options={CONTRACT_TYPE_OPTIONS}
               onChange={(value) => setFilters({ contractType: value ?? null })}
+            />
+
+            <Select
+              placeholder="失败类型"
+              style={{ width: 150 }}
+              allowClear
+              value={filters.failureType}
+              options={FAILURE_TYPE_OPTIONS}
+              onChange={(value) => setFilters({ failureType: value ?? null })}
             />
 
             <Button

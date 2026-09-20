@@ -48,6 +48,7 @@ import {
   Tag,
   Tooltip,
   Typography,
+  Upload,
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -63,6 +64,7 @@ import { taskApi } from '@/api/endpoints';
 import {
   RISK_LEVEL_LABEL,
   RISK_LEVEL_TAG_COLOR,
+  FAILURE_TYPE_LABEL,
   TASK_STATUS,
   TASK_STATUS_IN_PROGRESS,
   WRITE_BACK_STATUS_COLOR,
@@ -75,6 +77,8 @@ import {
   selectOverallRiskLevel,
   useWorkbenchStore,
 } from '@/stores/workbenchStore';
+import { useTaskStore } from '@/stores/taskStore';
+import { useAuthStore } from '@/stores/authStore';
 import { formatTime, taskStatusLabel } from '@/utils';
 import { useResponsive } from '@/hooks/useResponsive';
 
@@ -84,11 +88,14 @@ export default function WorkbenchPage(): React.ReactElement {
   const { taskNo } = useParams<{ taskNo: string }>();
   const navigate = useNavigate();
   const { message, modal } = App.useApp();
+  // 大盘/工作台共用的任务操作（重试 / 重新上传）与权限来源
+  const retryTask = useTaskStore((state) => state.retryTask);
+  const replaceFile = useTaskStore((state) => state.replaceFile);
+  const user = useAuthStore((state) => state.user);
 
   // ---------------- Store 状态 ----------------
   const taskDetail = useWorkbenchStore((state) => state.taskDetail);
-  const reviewResult = useWorkbenchStore((state) => state.reviewResult);
-  const pages = useWorkbenchStore((state) => state.pages);
+  const reviewResult = useWorkbenchStore((state) => state.reviewResult);  const pages = useWorkbenchStore((state) => state.pages);
   const locatedRisks = useWorkbenchStore((state) => state.locatedRisks);
   const riskDistribution = useWorkbenchStore((state) => state.riskDistribution);
   const selectedRiskId = useWorkbenchStore((state) => state.selectedRiskId);
@@ -202,6 +209,40 @@ export default function WorkbenchPage(): React.ReactElement {
   /** 是否被阻塞 */
   const isBlocked = taskDetail?.status === TASK_STATUS.BLOCKED;
 
+  /** 重新上传权限：仅提交经办人 / 管理员（权责分离，2026-09-20） */
+  const canReplaceFile =
+    taskDetail?.status === TASK_STATUS.FAILED &&
+    (user?.role === 'admin' ||
+      (taskDetail.created_by && taskDetail.created_by === user?.username));
+
+  /** 失败任务一键重试（复用大盘 taskStore 能力） */
+  const handleWorkbenchRetry = (): void => {
+    if (!taskDetail?.task_no) return;
+    void (async () => {
+      try {
+        await retryTask(taskDetail.task_no);
+        message.success('任务已重新排队，正在重试');
+        void initTask(taskDetail.task_no);
+      } catch {
+        message.error('重试失败，请稍后重试');
+      }
+    })();
+  };
+
+  /** 失败任务重新上传替换文件 */
+  const handleWorkbenchReplace = (file: File): void => {
+    if (!taskDetail?.task_no) return;
+    void (async () => {
+      try {
+        await replaceFile(taskDetail.task_no, file);
+        message.success('合同文件已替换并重新提交审查');
+        void initTask(taskDetail.task_no);
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : '重新上传失败');
+      }
+    })();
+  };
+
   // ====================================================================
   // 四、交互处理
   // ====================================================================
@@ -301,6 +342,62 @@ export default function WorkbenchPage(): React.ReactElement {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* ================= 顶部：失败错误横幅（2026-09-20 交互优化） ================= */}
+      {taskDetail?.status === TASK_STATUS.FAILED && (
+        <Alert
+          type="error"
+          showIcon
+          message="合同审查执行失败"
+          description={
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <span>
+                失败类型：
+                {FAILURE_TYPE_LABEL[taskDetail.failure_type ?? 'other'] ??
+                  taskDetail.failure_type}
+                ，失败原因：{taskDetail.failure_reason ?? '未知'}
+              </span>
+              <span style={{ color: '#8c8c8c' }}>
+                瞬时异常可直接一键重试；文件损坏请重新上传替换合同文件后重新提交。
+              </span>
+            </Space>
+          }
+          action={
+            <Space>
+              <Button size="small" icon={<SyncOutlined />} onClick={() => handleWorkbenchRetry()}>
+                一键重试
+              </Button>
+              {canReplaceFile && (
+                <Upload
+                  showUploadList={false}
+                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.tif,.tiff,.bmp"
+                  beforeUpload={(file) => {
+                    void handleWorkbenchReplace(file as unknown as File);
+                    return false;
+                  }}
+                >
+                  <Button size="small">重新上传</Button>
+                </Upload>
+              )}
+            </Space>
+          }
+        />
+      )}
+
+      {/* ================= 顶部：审查完成成功提示条（2026-09-20） ================= */}
+      {taskDetail?.status === TASK_STATUS.COMPLETED && (
+        <Alert
+          type="success"
+          showIcon
+          message="审查已完成"
+          description={`共命中 ${locatedRisks.length} 项风险`}
+          action={
+            <Button size="small" onClick={() => void generateReport('md')}>
+              查看风险报告
+            </Button>
+          }
+        />
+      )}
+
       {/* ================= 顶部：任务概要条 ================= */}
       <Card size="small" styles={{ body: { padding: '12px 16px' } }}>
         <Space

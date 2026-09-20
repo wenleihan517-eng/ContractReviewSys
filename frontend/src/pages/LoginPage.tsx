@@ -338,7 +338,7 @@ export default function LoginPage(): React.ReactElement {
             </div>
             <div>
               <Title level={4} style={{ margin: 0 }}>
-                合同智能审查系统
+                明契智审
               </Title>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 Contract Review System

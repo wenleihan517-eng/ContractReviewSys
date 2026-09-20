@@ -253,6 +253,17 @@ class ReviewTask(BaseModel):
         default="digital", description="合同来源类型 digital / scanned"
     )
     file_name: str = Field(default="", description="合同原件原始文件名")
+    # ---------------------- 失败分类（2026-09-20 交互优化新增） ----------------------
+    # 说明：解析/审查失败时按异常分类落库（FailureType），供大盘悬浮提示、
+    #       失败类型筛选与"瞬时异常自动重试一次"决策使用。
+    failure_type: Optional[str] = Field(
+        default=None,
+        description="失败类型（FailureType 取值）；仅 status=failed 时有值",
+    )
+    failure_reason: Optional[str] = Field(
+        default=None,
+        description="面向用户的失败原因摘要（脱敏后）；仅 status=failed 时有值",
+    )
     parse_status: str = Field(
         default="not_started", description="解析状态 not_started/parsing/parsed/failed"
     )

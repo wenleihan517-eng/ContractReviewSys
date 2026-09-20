@@ -94,6 +94,9 @@ export interface TaskListItem {
   progress: number;
   blocked_reason: string | null;
   created_at: string | null;
+  failure_type?: string | null;
+  failure_reason?: string | null;
+  created_by?: string;
 }
 
 /** 任务详情响应 */
@@ -116,6 +119,9 @@ export interface TaskDetailResponse {
   is_blocked: boolean;
   created_at: string | null;
   updated_at: string | null;
+  failure_type?: string | null;
+  failure_reason?: string | null;
+  created_by?: string;
 }
 
 /**
@@ -167,6 +173,12 @@ export interface DashboardRow {
   write_back_status: WriteBackStatus;
   /** 创建时间 */
   created_at: string | null;
+  /** 失败类型（FailureType，2026-09-20 交互优化） */
+  failure_type?: string | null;
+  /** 失败原因摘要（脱敏，悬浮提示用） */
+  failure_reason?: string | null;
+  /** 提交经办人（重新上传权限判定） */
+  created_by?: string;
 }
 
 /** 任务列表查询参数 */
@@ -175,6 +187,7 @@ export interface TaskListQuery {
   page?: number;
   page_size?: number;
   keyword?: string;
+  failure_type?: string;
 }
 
 /** 任务重试响应 */
@@ -693,4 +706,27 @@ export interface PermissionMatrixResponse {
 export interface ChangePasswordRequest {
   old_password: string;
   new_password: string;
+}
+
+/** 站内通知条目 */
+export interface NotificationItem {
+  notify_id: string;
+  type: string;
+  level: 'info' | 'critical';
+  title: string;
+  content: string;
+  task_no: string;
+  read: boolean;
+  created_at?: string;
+}
+
+/** 未读数量响应 */
+export interface UnreadCountResponse {
+  unread_count: number;
+}
+
+/** 任务列表项新增的失败分类字段 */
+export interface TaskFailureMeta {
+  failure_type?: string | null;
+  failure_reason?: string | null;
 }

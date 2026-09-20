@@ -71,6 +71,7 @@ import {
 } from '@/constants';
 import { useAuthStore } from '@/stores/authStore';
 import { useResponsive } from '@/hooks/useResponsive';
+import NotificationCenter from '@/components/NotificationCenter';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -240,7 +241,7 @@ export default function MainLayout(): React.ReactElement {
     >
       <AuditOutlined style={{ fontSize: 20 }} />
       <div style={{ lineHeight: 1.2 }}>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>合同智能审查</div>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>明契智审</div>
         <div style={{ fontSize: 11, opacity: 0.55 }}>Contract Review</div>
       </div>
     </div>
@@ -338,6 +339,9 @@ export default function MainLayout(): React.ReactElement {
           </Space>
 
           <Space size={12}>
+            {/* 站内消息中心（右上角铃铛，未读红点） */}
+            <NotificationCenter />
+
             {/* 权责声明：常驻提示，非装饰；手机端隐藏以免横向溢出 */}
             {!isMobile && (
               <Tooltip title="风险等级定级、违规判定与审查结论均由规则引擎终裁；大模型仅提供条款语义解析与修改建议草稿。">

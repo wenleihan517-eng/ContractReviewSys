@@ -61,6 +61,7 @@ def _schedule_auto_review(
     object_key: str,
     source_type: str,
     file_name: str,
+    operator_username: str = "",
 ) -> None:
     """
     调度后台自动审查（fire-and-forget）
@@ -76,6 +77,7 @@ def _schedule_auto_review(
         object_key: 合同对象键
         source_type: digital / scanned
         file_name: 原始文件名（标题兜底用）
+        operator_username: 提交经办人（完成/失败通知的精确接收人）
     """
     if task_id in _auto_review_inflight:
         logger.info("自动审查已在执行，跳过重复调度 | 任务=%s", task_no)
@@ -83,23 +85,98 @@ def _schedule_auto_review(
     _auto_review_inflight.add(task_id)
 
     async def _runner() -> None:
+        # 【2026-09-20 交互优化】审查失败分类 + 瞬时异常自动重试 1 次 + 通知
         try:
-            outcome = await trigger_review(
-                task_id,
-                object_key=object_key,
-                source_type=source_type,
-                file_name=file_name,
-            )
-            logger.info(
-                "自动审查完成 | 任务=%s | accepted=%s | 状态=%s | message=%s",
-                task_no, outcome.accepted, outcome.status, outcome.message,
-            )
-        except Exception as exc:  # noqa: BLE001 - 后台任务必须自吞异常
-            logger.error(
-                "自动审查执行异常 | 任务=%s | 异常=%s", task_no, exc, exc_info=True
-            )
+            await _auto_review_attempt()
         finally:
             _auto_review_inflight.discard(task_id)
+
+    async def _auto_review_attempt() -> None:
+        from app.services.failure_classifier import classify_failure
+
+        max_attempts = 2  # 原始 1 次 + 瞬时异常自动重试 1 次
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
+            failure_type = ""
+            reason = ""
+            advice = ""
+            is_transient = False
+            try:
+                outcome = await trigger_review(
+                    task_id,
+                    object_key=object_key,
+                    source_type=source_type,
+                    file_name=file_name,
+                )
+                logger.info(
+                    "自动审查完成 | 任务=%s | accepted=%s | 状态=%s | message=%s",
+                    task_no, outcome.accepted, outcome.status, outcome.message,
+                )
+                if outcome.accepted:
+                    # 流程正常走完（含规则引擎终裁 blocked，属正确判定非异常）。
+                    # 仅"审查完成"向经办员发通知；blocked/failed 不发完成通知。
+                    if outcome.status in ("completed", "reviewed"):
+                        from app.services import notification_service
+
+                        await notification_service.notify_task_completed(
+                            task_no=task_no,
+                            risk_level=outcome.risk_level or "未知",
+                            risk_count=outcome.risk_item_count or 0,
+                            operator_username=operator_username,
+                        )
+                    return
+                # accepted=False：图执行异常，任务已被置为 failed
+                failure_type, reason, advice, is_transient = classify_failure(
+                    None, outcome.message
+                )
+            except Exception as exc:  # noqa: BLE001 - 后台任务必须自吞异常
+                logger.error(
+                    "自动审查执行异常 | 任务=%s | 异常=%s", task_no, exc, exc_info=True
+                )
+                failure_type, reason, advice, is_transient = classify_failure(exc)
+
+            # 本次尝试失败：落失败分类
+            from app.repositories import task_repo
+
+            await task_repo.update_task(
+                task_id,
+                {
+                    "status": ReviewTaskStatus.FAILED.value,
+                    "failure_type": failure_type,
+                    "failure_reason": reason,
+                    "updated_at": datetime.now(),
+                },
+            )
+
+            # 瞬时异常自动重试 1 次；重试额度用尽后推送人工通知
+            if is_transient and attempt < max_attempts:
+                logger.warning(
+                    "审查瞬时异常，自动重试（1/1）| 任务=%s | 类型=%s",
+                    task_no, failure_type,
+                )
+                await task_repo.update_task(
+                    task_id,
+                    {
+                        "status": ReviewTaskStatus.RUNNING.value,
+                        "failure_type": None,
+                        "failure_reason": None,
+                        "updated_at": datetime.now(),
+                    },
+                )
+                await asyncio.sleep(5)
+                continue
+
+            from app.services import notification_service
+
+            await notification_service.notify_task_failed(
+                task_no=task_no,
+                failure_type=failure_type,
+                reason=reason,
+                advice=advice,
+                operator_username=operator_username,
+            )
+            return
 
     task = asyncio.create_task(_runner(), name=f"auto-review-{task_no}")
     # 持有强引用，防止任务被垃圾回收中途取消（asyncio 官方建议做法）
@@ -108,6 +185,65 @@ def _schedule_auto_review(
 
 # 后台任务强引用集合（仅防 GC，不参与业务判断）
 _auto_review_tasks: set = set()
+
+# 解析瞬时异常自动重试的防重入标记：
+# 首次失败调度重试时加入，自动重试完成（无论成败）后移除；
+# 重试期间再次失败则不再调度（保证"瞬时异常后台自动重试 1 次"语义）。
+_parse_retry_scheduled: Set[str] = set()
+
+
+def _schedule_parse_auto_retry(
+    task_id: str,
+    task_no: str,
+    object_key: str,
+    source_type: str,
+    file_name: str,
+) -> bool:
+    """
+    调度解析瞬时异常的后台自动重试（仅 1 次）
+
+    说明：
+        需求「失败自动重试机制」：仅接口超时、网络抖动这类瞬时异常，
+        后台自动重试 1 次；文件损坏、格式错误类异常不自动重试，
+        直接标记失败并推送人工通知，避免无效重复调用接口浪费资源。
+
+    返回：
+        True 表示已调度自动重试（此时不发人工通知）；
+        False 表示不再调度（已重试过或非调度场景，调用方应发人工通知）
+    """
+    if task_id in _parse_retry_scheduled:
+        return False
+    _parse_retry_scheduled.add(task_id)
+
+    async def _retry_runner() -> None:
+        try:
+            await asyncio.sleep(5)
+            logger.warning("解析瞬时异常，自动重试（1/1）| 任务=%s", task_no)
+            from app.repositories import task_repo
+            await task_repo.update_task(
+                task_id,
+                {
+                    "status": ReviewTaskStatus.RUNNING.value,
+                    "parse_status": "parsing",
+                    "failure_type": None,
+                    "failure_reason": None,
+                    "updated_at": datetime.now(),
+                },
+            )
+            await trigger_parse(
+                task_id,
+                object_key=object_key,
+                source_type=source_type,
+                file_name=file_name,
+            )
+        except Exception as exc:  # noqa: BLE001 - 后台任务自吞异常
+            logger.error("解析自动重试仍失败 | 任务=%s | 异常=%s", task_no, exc)
+        finally:
+            _parse_retry_scheduled.discard(task_id)
+
+    task = asyncio.create_task(_retry_runner(), name=f"parse-retry-{task_no}")
+    _auto_review_tasks.add(task)
+    return True
 
 
 # ======================================================================
@@ -395,21 +531,54 @@ async def trigger_parse(
             file_name=file_name,
         )
     except Exception as exc:  # noqa: BLE001 - 解析异常转为任务失败态
-        logger.error("文档解析失败 | 任务=%s | 异常=%s", task_id, exc, exc_info=True)
+        # 【2026-09-20 交互优化】失败分类落库：类型 + 面向用户原因（脱敏），
+        # 供大盘悬浮提示、失败类型筛选、自动重试决策与人工通知使用。
+        from app.services.failure_classifier import classify_failure
+
+        failure_type, reason, advice, is_transient = classify_failure(exc)
+        logger.error(
+            "文档解析失败 | 任务=%s | 类型=%s | 异常=%s",
+            task_id, failure_type, exc, exc_info=True,
+        )
         await task_repo.update_task(
             task_id,
             {
                 "status": ReviewTaskStatus.FAILED.value,
                 "parse_status": "failed",
+                "failure_type": failure_type,
+                "failure_reason": reason,
                 "updated_at": datetime.now(),
             },
         )
+
+        # 瞬时异常（OCR 超时 / 网络抖动）：后台自动重试 1 次，暂不发人工通知；
+        # 自动重试仍失败（不再调度）时才推送人工通知 —— 避免无效告警轰炸。
+        scheduled = False
+        if is_transient:
+            scheduled = _schedule_parse_auto_retry(
+                task_id=task_id,
+                task_no=task.task_no,
+                object_key=object_key,
+                source_type=source_type,
+                file_name=file_name,
+            )
+        if not scheduled:
+            from app.services import notification_service
+
+            await notification_service.notify_task_failed(
+                task_no=task.task_no,
+                failure_type=failure_type,
+                reason=reason,
+                advice=advice,
+                operator_username=task.created_by or "",
+            )
+
         return ParseTriggerOutcome(
             task_id=task_id,
             task_no=task.task_no,
             accepted=False,
             status=ReviewTaskStatus.FAILED.value,
-            message=f"解析失败：{exc}",
+            message=f"解析失败：{reason}",
         )
 
     full_text = getattr(result, "full_text", "") or ""
@@ -494,6 +663,7 @@ async def trigger_parse(
         object_key=object_key,
         source_type=source_type,
         file_name=file_name,
+        operator_username=task.created_by or "",
     )
 
     return ParseTriggerOutcome(

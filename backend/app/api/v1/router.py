@@ -32,6 +32,7 @@ from app.api.v1 import auth
 from app.api.v1.endpoints import (
     audit,
     health,
+    notifications,
     parse,
     report_comment,
     review,
@@ -54,3 +55,4 @@ api_router.include_router(review.router)                 # 风险审查
 api_router.include_router(report_comment.router)         # 报告与评论
 api_router.include_router(rules.router)                  # 规则管理
 api_router.include_router(audit.router)                  # 审计日志
+api_router.include_router(notifications.router)          # 站内通知（消息中心）

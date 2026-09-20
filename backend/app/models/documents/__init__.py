@@ -28,6 +28,7 @@
 
 from app.models.documents.clause import BoundingBox, ContractClause
 from app.models.documents.contract import Contract, PartyInfo
+from app.models.documents.notification import Notification
 from app.models.documents.review_conclusion import ReviewConclusion
 from app.models.documents.review_task import (
     BlockedReason,
@@ -45,6 +46,8 @@ __all__ = [
     # 条款
     "ContractClause",
     "BoundingBox",
+    # 通知
+    "Notification",
     # 任务
     "ReviewTask",
     "NodeExecution",

@@ -613,6 +613,30 @@ class Settings(BaseSettings):
         default="your-approval-api-key",
         description="审批系统对接鉴权密钥",
     )
+    # ------------------ 消息通知（分级推送） ------------------
+    QQ_PUSH_WEBHOOK_URL: str = Field(
+        default="",
+        description=(
+            "QQ 通知推送 Webhook 地址（POST JSON）。"
+            "为空时 QQ 通道跳过（通知仅落库，状态记 skipped），不影响站内通知"
+        ),
+    )
+    QQ_NOTIFY_OPERATOR: str = Field(
+        default="2241071024",
+        description="经办员 QQ 号：接收本人提交合同的审查成功/失败全部通知",
+    )
+    QQ_NOTIFY_ADMIN: str = Field(
+        default="2584076700",
+        description="管理员 QQ 号：仅接收执行失败、系统级异常通知",
+    )
+    QQ_NOTIFY_REVIEWER: str = Field(
+        default="1623084893",
+        description="审查员 QQ 号：仅接收异常任务通知",
+    )
+    QQ_NOTIFY_GROUP: str = Field(
+        default="1070152604",
+        description="工作群号：仅推送大批量 OCR 失败、系统故障等高优先级异常",
+    )
     APPROVAL_TIMEOUT_SECONDS: float = Field(
         default=30.0,
         gt=0.0,
