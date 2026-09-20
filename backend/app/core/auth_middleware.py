@@ -304,6 +304,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if _is_always_allowed(path):
             return await call_next(request)
 
+        # ---- 放行判断 3.5：前端页面与静态资源（单端口部署）----
+        # 除 /api 前缀外的路径均属前端 SPA（/、/login、/dashboard、
+        # /workbench/xxx、/assets/*.js 等）与静态资源。这些请求由浏览器
+        # 在未携带令牌时发起，登录态判断与跳转由前端 JS 负责；
+        # 若在此拦截，首次打开页面即 401、资源加载失败，页面白屏。
+        # 因此仅对 /api 子树做中间件鉴权，其余路径放行到路由层。
+        is_api_path = path == "/api" or path.startswith("/api/")
+        if not is_api_path:
+            return await call_next(request)
+
         # ---- 放行判断 4：白名单路径 ----
         whitelist = settings.auth_whitelist_paths
         if _is_whitelisted(path, whitelist):

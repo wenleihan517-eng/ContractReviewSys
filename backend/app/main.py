@@ -29,6 +29,7 @@ FastAPI 应用主入口
 
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict
 
 from fastapi import FastAPI
@@ -268,24 +269,51 @@ def create_app() -> FastAPI:
     application.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
     # ------------------------------------------------------------------
-    # 根路径：服务基础信息
+    # 前端单端口托管（2026-09-20：React 打包嵌入 FastAPI）
     # ------------------------------------------------------------------
-    @application.get("/", include_in_schema=False)
-    async def root() -> Dict[str, Any]:
-        """
-        根路径信息
+    # 说明：生产/公网部署时由后端统一托管前端静态产物，实现"单端口"访问。
+    # 前端构建产物位于 frontend/dist（vite build 生成），通过相对路径
+    # /api/v1 调用本服务，同源无需跨域。SPA 深层路由（/dashboard 等）
+    # 由 catch-all 回退到 index.html，交由前端路由接管。
+    _frontend_dist = (
+        Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+    )
+    if _frontend_dist.is_dir() and (_frontend_dist / "index.html").is_file():
+        from fastapi.staticfiles import StaticFiles
+        from starlette.responses import FileResponse
 
-        返回：
-            服务基础信息字典（应用名、版本、环境、文档地址、接口前缀）
-        """
-        return {
-            "app": settings.APP_NAME,
-            "version": settings.APP_VERSION,
-            "env": settings.APP_ENV,
-            "docs": docs_url or "已关闭（生产环境）",
-            "api_prefix": settings.API_V1_PREFIX,
-            "rule_engine_enabled": settings.RULE_ENGINE_ENABLED,
-        }
+        _assets_dir = _frontend_dist / "assets"
+        if _assets_dir.is_dir():
+            application.mount(
+                "/assets",
+                StaticFiles(directory=str(_assets_dir)),
+                name="frontend-assets",
+            )
+
+        @application.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str):
+            """
+            前端 SPA 兜底路由
+
+            说明：
+                - 命中真实静态文件（如 /favicon.ico、根 index.html）时直接返回；
+                - 其余路径（/login、/dashboard、/workbench/xxx 等前端路由）
+                  一律返回 index.html，交由前端 react-router 接管渲染。
+                该路由在 API 路由之后注册，不会拦截 /api/*（其已被
+                include_router 的精确路由优先匹配）。
+            """
+            candidate = (_frontend_dist / full_path).resolve()
+            try:
+                candidate.relative_to(_frontend_dist.resolve())
+                if candidate.is_file():
+                    return FileResponse(candidate)
+            except ValueError:
+                pass  # 路径逃逸出 dist，忽略并回退 index.html
+            return FileResponse(_frontend_dist / "index.html")
+
+        logger.info(
+            "前端静态托管已启用 | dist=%s", _frontend_dist,
+        )
 
     return application
 
