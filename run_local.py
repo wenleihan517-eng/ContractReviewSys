@@ -57,8 +57,28 @@ FRONTEND = ROOT / "frontend"
 LOGDIR = ROOT / "storage" / "logs" / "local_run"
 PIDFILE = ROOT / "storage" / "local_run_pids.json"
 
-VENV_PY = Path(r"C:/Users/Lenovo/.workbuddy/binaries/python/envs/default/Scripts/python.exe")
-NODE_BIN = Path(r"C:/Users/Lenovo/.workbuddy/binaries/node/versions/22.22.2-2/node.exe")
+def _resolve_first_existing(candidates, label):
+    """按顺序返回第一个存在的路径；全部不存在则报人话错误。"""
+    for p in candidates:
+        if p.exists():
+            return p
+    raise FileNotFoundError(
+        f"找不到 {label}，已尝试以下路径：\n  " + "\n  ".join(str(p) for p in candidates)
+    )
+
+# 托管 Node 的构建号会随升级变化（如 22.22.2-2 -> 22.22.2-6），
+# 因此优先用稳定的 current 入口，再回落到系统 Node。
+NODE_BIN = _resolve_first_existing([
+    Path(r"C:/Users/Lenovo/.workbuddy/binaries/node/versions/current/node.exe"),
+    Path(r"C:/Program Files/nodejs/node.exe"),
+    *(sorted(Path(r"C:/Users/Lenovo/.workbuddy/binaries/node/versions").glob("*/node.exe"), reverse=True)
+      if Path(r"C:/Users/Lenovo/.workbuddy/binaries/node/versions").is_dir() else []),
+], "node.exe")
+
+VENV_PY = _resolve_first_existing([
+    Path(r"C:/Users/Lenovo/.workbuddy/binaries/python/envs/default/Scripts/python.exe"),
+    Path(r"D:/Python/python.exe"),
+], "python.exe（venv）")
 
 BACKEND_PORT = 8100
 FRONTEND_PORT = 5173
