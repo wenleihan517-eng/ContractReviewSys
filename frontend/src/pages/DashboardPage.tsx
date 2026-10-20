@@ -97,6 +97,22 @@ const RETRYABLE_STATUSES: TaskStatus[] = [
   TASK_STATUS.CANCELLED,
 ];
 
+/**
+ * 已有审查结论、可查看报告的任务状态集合
+ *
+ * 说明：
+ *   - rule_done    规则引擎已判定（结论已产出，报告可生成）
+ *   - blocked      被规则拦截，但结论与风险项已落库（更应让经办人看到原因）
+ *   - completed    全流程完成
+ *   进行中（pending/running/llm_done）尚无结论，不展示入口，
+ *   避免点进去只看到"审查尚未完成"的空页面。
+ */
+const REPORT_VIEWABLE_STATUSES: TaskStatus[] = [
+  TASK_STATUS.RULE_DONE,
+  TASK_STATUS.BLOCKED,
+  TASK_STATUS.COMPLETED,
+];
+
 /** 路由类型展示配置 */
 const ROUTE_TYPE_CONFIG: Record<string, { label: string; color: string }> = {
   fast: { label: '快速通道', color: 'cyan' },
@@ -222,6 +238,39 @@ export default function DashboardPage(): React.ReactElement {
     navigate(`/workbench/${taskNo}`);
   };
 
+  /**
+   * 已知任务的默认去向（按角色分流）
+   *
+   * 参数：
+   *   taskNo: 任务编号
+   *
+   * 说明：
+   *   经办人无工作台权限，统一去只读报告页；法务/管理员去工作台。
+   *   抽成单一函数，避免"合同名称点击"与"操作按钮"两处判断不一致，
+   *   导致某一处漏改又把经办人弹回大盘。
+   */
+  const openTaskDefault = (taskNo: string): void => {
+    if (user?.role === 'law_user' || user?.role === 'admin') {
+      openWorkbench(taskNo);
+    } else {
+      openReport(taskNo);
+    }
+  };
+
+  /**
+   * 进入只读审查报告页
+   *
+   * 参数：
+   *   taskNo: 任务编号
+   *
+   * 说明：
+   *   报告页对三种角色均开放，数据可见范围由后端按"任务提交人/法务/管理员"裁定。
+   *   经办人走这里查看结果——工作台含风险项编辑与回写能力，对经办人是越权的。
+   */
+  const openReport = (taskNo: string): void => {
+    navigate(`/report/${taskNo}`);
+  };
+
   /** 单任务重试（含阻塞任务的二次确认） */
   const handleRetry = (row: DashboardRow): void => {
     if (row.status === TASK_STATUS.BLOCKED) {
@@ -330,16 +379,53 @@ export default function DashboardPage(): React.ReactElement {
       (user?.role === 'admin' ||
         (row.created_by && row.created_by === user?.username));
 
+    /**
+     * 主入口按钮的角色分流（2026-09-20 修复）
+     *
+     * 背景：原实现对所有角色一律跳 /workbench，而该路由对 business_user
+     *       是禁止的（工作台含风险定级明细与法务批注），经办人点「审查」
+     *       会被角色守卫弹回大盘并弹"无访问权限"——按钮可见却不可用。
+     *
+     * 现按角色分流（与 openTaskDefault 同源，避免两处判断漂移）：
+     *   经办人 → 只读报告页 /report/{taskNo}（含结论、风险摘要、报告下载）
+     *   法务/管理员 → 工作台 /workbench/{taskNo}（可复核、批注、回写）
+     * 这样既消除了"点了被弹回"的坏体验，又守住了权责边界：
+     * 经办人始终拿不到任何写操作入口。
+     */
+    const canUseWorkbench = user?.role === 'law_user' || user?.role === 'admin';
+    const isDone = row.status === TASK_STATUS.COMPLETED;
+    // 主按钮文案：经办人进的是报告页，文案要说清"能看什么"。
+    // 用 hasReport（rule_done / blocked / completed）而非仅 completed 判定 ——
+    // 阻塞任务的规则结论与风险项已落库、报告页可正常展示，
+    // 若仍显示"查看进度"会低估可获取的信息（实际能看到完整风险清单）。
+    const hasReport = REPORT_VIEWABLE_STATUSES.includes(row.status);
+    const primaryLabel = canUseWorkbench
+      ? '审查'
+      : hasReport
+        ? '查看报告'
+        : '查看进度';
+
     return (
       <Space size={4} wrap>
         <Button
           type="link"
           size="small"
           style={{ padding: '0 4px' }}
-          onClick={() => openWorkbench(row.task_no)}
+          onClick={() => openTaskDefault(row.task_no)}
         >
-          审查
+          {primaryLabel}
         </Button>
+        {/* 已完成任务：法务/管理员额外提供报告入口（与工作台内报告抽屉等价） */}
+        {canUseWorkbench && isDone && (
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: '0 4px' }}
+            onClick={() => openReport(row.task_no)}
+          >
+            报告
+          </Button>
+        )}
         {canRetry && (
           <Button
             type="link"
@@ -390,7 +476,7 @@ export default function DashboardPage(): React.ReactElement {
             <Text
               strong
               style={{ cursor: 'pointer' }}
-              onClick={() => openWorkbench(row.task_no)}
+              onClick={() => openTaskDefault(row.task_no)}
             >
               {truncate(row.contract_title, 28)}
             </Text>
@@ -1020,13 +1106,19 @@ export default function DashboardPage(): React.ReactElement {
         onSuccess={(taskNo) => {
           // 上传成功后刷新列表，让新任务立刻出现在列表中
           void loadTasks();
-          // 并引导使用者直接进入工作台，减少一次查找成本
+          // 引导使用者直接进入可用的作业面。
+          // 注意：这里同样按角色分流——经办人不能进工作台（会被守卫弹回），
+          // 因此文案与目标都要跟着角色走，否则又是一个"点了被弹回"的入口。
+          const toWorkbench =
+            user?.role === 'law_user' || user?.role === 'admin';
           modal.confirm({
             title: '合同已提交审查',
-            content: `任务编号 ${taskNo} 已进入审查流水线，是否立即进入工作台查看？`,
-            okText: '进入工作台',
+            content: toWorkbench
+              ? `任务编号 ${taskNo} 已进入审查流水线，是否立即进入工作台查看？`
+              : `任务编号 ${taskNo} 已进入审查流水线，审查完成后可在「审查报告」中查看结论与下载报告。`,
+            okText: toWorkbench ? '进入工作台' : '查看任务',
             cancelText: '留在列表',
-            onOk: () => openWorkbench(taskNo),
+            onOk: () => openTaskDefault(taskNo),
           });
         }}
       />

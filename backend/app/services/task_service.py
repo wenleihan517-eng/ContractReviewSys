@@ -19,6 +19,7 @@
     - list_tasks()：返回 (items, total)
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.constants import ReviewTaskStatus
@@ -338,8 +339,6 @@ async def recover_interrupted_tasks() -> int:
     返回：
         被标记为失败的任务条数
     """
-    from datetime import datetime
-
     from app.constants import MongoCollection, FailureType, ReviewTaskStatus
     from app.storage.mongo_client import mongo_client
 

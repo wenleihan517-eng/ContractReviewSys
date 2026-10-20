@@ -20,6 +20,7 @@
  *   /workbench           智能审查工作台    —— 法务 / 管理员
  *   /workbench/:taskNo   智能审查工作台    —— 法务 / 管理员
  *   /rules               合规规则与模板    —— 仅管理员
+ *   /report/:taskNo      审查报告（只读）  —— 三种角色均可
  *   *                    兜底：按角色回默认首页
  *
  * 【为什么不用 loader 做鉴权】
@@ -40,6 +41,7 @@ const LoginPage = lazy(() => import('@/pages/LoginPage'));
 const DashboardPage = lazy(() => import('@/pages/DashboardPage'));
 const WorkbenchPage = lazy(() => import('@/pages/WorkbenchPage'));
 const RulesPage = lazy(() => import('@/pages/RulesPage'));
+const ReportPage = lazy(() => import('@/pages/ReportPage'));
 
 /**
  * 页面加载占位
@@ -127,6 +129,10 @@ export default function AppRouter(): React.ReactElement {
 
         {/* 页面三：合规规则与模板（仅管理员） */}
         <Route path="rules" element={lazyPage(<RulesPage />)} />
+
+        {/* 页面四：审查报告（只读，三种角色均可；可见范围由后端按提交人裁定） */}
+        <Route path="report" element={lazyPage(<ReportPage />)} />
+        <Route path="report/:taskNo" element={lazyPage(<ReportPage />)} />
 
         {/* 兜底：未知路径按角色回默认首页 */}
         <Route path="*" element={<RoleHomeRedirect />} />

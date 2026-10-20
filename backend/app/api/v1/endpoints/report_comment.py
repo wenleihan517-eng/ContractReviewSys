@@ -23,13 +23,30 @@
 【权限模型】
     下载需 PERM_REPORT_DOWNLOAD 权限点（三角色均持有）；
     且仅「任务提交人 / 法务 / 管理员」可下载对应报告，其余角色视为越权。
+
+【鉴权补全（2026-09-21）】
+    评论预览 / 回写属法务审查职责，此前未做权限校验，
+    业务经办人可直接调用（可代法务生成并回写审批评论），属越权。
+    现按权限点收口：
+      · comment/preview     → comment:annotate（法务 / 管理员）
+      · comment/write-back  → approval:write_back（法务 / 管理员）
 """
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 
-from app.constants import PERM_REPORT_DOWNLOAD, UserRole
-from app.core.dependencies import CurrentUser, get_current_user, get_current_request_id
+from app.constants import (
+    PERM_APPROVAL_WRITE_BACK,
+    PERM_COMMENT_ANNOTATE,
+    PERM_REPORT_DOWNLOAD,
+    UserRole,
+)
+from app.core.dependencies import (
+    CurrentUser,
+    get_current_request_id,
+    get_current_user,
+    require_permissions,
+)
 from app.core.exceptions import BusinessException, ErrorCode
 from app.core.logging_config import get_logger
 from app.core.response import ApiResponse, success_response
@@ -146,17 +163,26 @@ async def generate_report(
         for item in risk_items:
             distribution[item.risk_level] = distribution.get(item.risk_level, 0) + 1
 
+    # 合同业务字段兜底（主档 → parse_snapshot.auto_metadata → 占位）
+    fields = _resolve_contract_fields(task)
+
     # 组装 ReviewTaskState（供报告渲染使用）
     state = ReviewTaskState(
         task_id=task_id,
         task_no=task.task_no,
         contract_id=task.contract_id,
-        # 合同业务字段：任务主档未存这些字段，从审批系统上下文补齐
-        contract_title=getattr(task, "contract_title", "") or "",
-        contract_no=getattr(task, "contract_no", "") or task.task_no,
-        contract_type=getattr(task, "contract_type", "other") or "other",
-        contract_amount=getattr(task, "contract_amount", 0.0) or 0.0,
-        currency=getattr(task, "currency", "CNY") or "CNY",
+        # 合同业务字段：主档未存，统一走自动识别兜底，避免报告头字段失真
+        contract_title=fields["contract_title"],
+        contract_no=fields["contract_no"],
+        contract_type=fields["contract_type"],
+        contract_amount=fields["contract_amount"],
+        currency=fields["currency"],
+        counterparty=fields["counterparty"],
+        applicant=fields["applicant"],
+        # 审批单 ID：审查阶段为「审批单号 → 任务编号」兜底，此处同级兜底
+        approval_id=task.task_no,
+        # 审查链路：主档建单时已决策落库，重建时原样取回（否则报告恒显示默认链路）
+        route_type=getattr(task, "route_type", "") or "standard",
         # 审查结论（规则引擎产出，原样回填）
         final_risk_items=risk_items,
         risk_level=(conclusion_doc or {}).get("risk_level"),
@@ -235,10 +261,15 @@ async def generate_report(
 
 
 @router.post("/{task_id}/comment/preview", summary="预览审批评论",
-             description="按模板拼装审批评论并预览（不写入审批系统）。")
+             description="按模板拼装审批评论并预览（不写入审批系统）。",
+             dependencies=[Depends(require_permissions(PERM_COMMENT_ANNOTATE))])
 async def preview_comment(task_id: str, body: CommentPreviewRequest) -> ApiResponse:
     """
     预览审批评论
+
+    【权限】需 comment:annotate（法务审查人 / 系统管理员）。
+    经办人无该权限点 → 403：人工批注属法务职责，
+    经办人的职责边界止于"提交合同"与"查看报告"。
 
     入参：
         task_id: 任务 ID（路径参数）
@@ -277,12 +308,17 @@ async def preview_comment(task_id: str, body: CommentPreviewRequest) -> ApiRespo
 
 
 @router.post("/{task_id}/comment/write-back", summary="正式回写审批评论",
-             description="将审查意见写入审批系统评论区（支持预览模式）。")
+             description="将审查意见写入审批系统评论区（支持预览模式）。",
+             dependencies=[Depends(require_permissions(PERM_APPROVAL_WRITE_BACK))])
 async def write_back_comment(task_id: str, body: CommentWriteBackRequest) -> ApiResponse:
     """
     正式回写审批评论
 
     【权责红线】仅写入评论区，不改变审批结论。
+
+    【权限】需 approval:write_back（法务审查人 / 系统管理员）。
+    这是本系统唯一对外产生副作用的"写审批系统"动作，
+    必须由具备回写权限的角色发起；经办人调用返回 403。
 
     入参：
         task_id: 任务 ID（路径参数）
@@ -591,6 +627,63 @@ async def _load_conclusion_and_risks(task_id: str) -> tuple:
     return conclusion_doc, risk_docs
 
 
+def _resolve_contract_fields(task) -> dict:
+    """
+    解析合同的业务字段（标题 / 编号 / 类型 / 金额 / 币种 / 相对方）
+
+    【为什么需要这个兜底（2026-09-21 修复｜报告失真）】
+        任务主档 ReviewTask 只持久化了 contract_title 一个合同业务字段；
+        contract_no / contract_type / contract_amount / counterparty 等
+        在设计口径上"由审批系统提供"，主档不存。但报告与评论走的是
+        "从库重建图状态"的路径，审批单上下文此时已不可得，若不补兜底，
+        报告头会被渲染成：
+            合同编号 = 任务编号（如 T2026092109195924）
+            合同类型 = other
+            合同金额 = 0.00
+            合同相对方 = 空
+        即"审查时用对了字段、出报告时字段全丢"的可见失真。
+
+        解析阶段已把自动识别结果（含证据 evidence）写入
+        parse_snapshot.auto_metadata，故此处统一按
+        「任务主档 → parse_snapshot.auto_metadata → 占位」兜底，
+        与 orchestration_service._build_initial_state 的取值链保持同源同口径。
+
+    参数：
+        task: ReviewTask 主档对象
+
+    返回：
+        字段字典：contract_title / contract_no / contract_type /
+                 contract_amount / currency / counterparty / applicant
+    """
+    snapshot = getattr(task, "parse_snapshot", None) or {}
+    auto_meta = snapshot.get("auto_metadata") or {}
+
+    title = (getattr(task, "contract_title", "") or "").strip()
+    if not title:
+        title = (auto_meta.get("contract_title") or "").strip()
+
+    contract_no = (auto_meta.get("contract_no") or "").strip() or task.task_no
+    # 类型口径必须与规则集加载口径一致：识别不出时回落 other（只跑通用规则）
+    contract_type = (auto_meta.get("contract_type") or "").strip() or "other"
+
+    try:
+        contract_amount = float(auto_meta.get("amount") or 0.0)
+    except (TypeError, ValueError):
+        contract_amount = 0.0
+
+    return {
+        "contract_title": title,
+        "contract_no": contract_no,
+        "contract_type": contract_type,
+        "contract_amount": contract_amount,
+        "currency": (auto_meta.get("currency") or "CNY").strip() or "CNY",
+        "counterparty": (auto_meta.get("party_b_name") or "").strip(),
+        # 申请人：审查阶段口径为「审批单申请人 → 任务提交人」；
+        # 报告重建阶段审批单不可得，退化为任务提交人（created_by 存的是账号）
+        "applicant": (getattr(task, "created_by", "") or "").strip(),
+    }
+
+
 async def _rebuild_review_state(task) -> "ReviewTaskState":
     """
     按任务真实 _id 从数据库重建完整审查状态（结论 + 正式风险项）
@@ -644,16 +737,25 @@ async def _rebuild_review_state(task) -> "ReviewTaskState":
         for item in risk_items:
             distribution[item.risk_level] = distribution.get(item.risk_level, 0) + 1
 
+    # 合同业务字段兜底（主档 → parse_snapshot.auto_metadata → 占位）
+    fields = _resolve_contract_fields(task)
+
     return ReviewTaskState(
         task_id=str(task.id),
         task_no=task.task_no,
         contract_id=task.contract_id,
-        # 合同业务字段：任务主档未存这些字段，尽量从主档自动识别值兜底
-        contract_title=getattr(task, "contract_title", "") or "",
-        contract_no=getattr(task, "contract_no", "") or task.task_no,
-        contract_type=getattr(task, "contract_type", "other") or "other",
-        contract_amount=getattr(task, "contract_amount", 0.0) or 0.0,
-        currency=getattr(task, "currency", "CNY") or "CNY",
+        # 合同业务字段：主档未存，统一走自动识别兜底
+        contract_title=fields["contract_title"],
+        contract_no=fields["contract_no"],
+        contract_type=fields["contract_type"],
+        contract_amount=fields["contract_amount"],
+        currency=fields["currency"],
+        counterparty=fields["counterparty"],
+        applicant=fields["applicant"],
+        # 审批单 ID：审查阶段为「审批单号 → 任务编号」兜底，此处同级兜底
+        approval_id=task.task_no,
+        # 审查链路：主档建单时已决策落库，重建时原样取回（否则报告恒显示默认链路）
+        route_type=getattr(task, "route_type", "") or "standard",
         # 审查结论（规则引擎产出，原样回填）
         final_risk_items=risk_items,
         risk_level=(conclusion_doc or {}).get("risk_level"),

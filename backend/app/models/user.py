@@ -428,10 +428,16 @@ class UserInDB(User):
 #     密码由启动流程在落库前统一做 bcrypt 哈希，明文只存在于此处常量中，
 #     且仅用于初始化；数据库中永远只有哈希串。
 #     生产环境部署前必须删除该常量并修改全部内置账号密码。
+# 【display_name 命名规范（务必遵守）】
+#     展示名**只写姓名**，严禁附加角色文字（如"张经办（业务经办人）"）。
+#     原因：前端顶栏的用户信息区是「显示名 + 角色标签」并排渲染的
+#     （layouts/MainLayout.tsx），角色标签已由 role 字段驱动展示；
+#     若展示名里再带一次角色，界面上会出现"业务经办人（业务经办人）"式重复，
+#     属于典型的信息冗余。角色信息请只通过 role 字段表达。
 BUILTIN_USERS: List[Dict[str, Any]] = [
     {
         "username": "user_business",
-        "display_name": "张经办（业务经办人）",
+        "display_name": "张经办",
         "role": UserRole.BUSINESS_USER,
         "department": "业务一部",
         "email": "user_business@example.com",
@@ -439,7 +445,7 @@ BUILTIN_USERS: List[Dict[str, Any]] = [
     },
     {
         "username": "user_law",
-        "display_name": "李法务（法务审查人）",
+        "display_name": "李法务",
         "role": UserRole.LAW_USER,
         "department": "法务合规部",
         "email": "user_law@example.com",
@@ -447,7 +453,7 @@ BUILTIN_USERS: List[Dict[str, Any]] = [
     },
     {
         "username": "user_admin",
-        "display_name": "王管理（系统管理员）",
+        "display_name": "王管理",
         "role": UserRole.ADMIN,
         "department": "信息技术部",
         "email": "user_admin@example.com",

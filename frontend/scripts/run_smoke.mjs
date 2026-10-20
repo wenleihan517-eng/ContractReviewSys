@@ -1011,7 +1011,7 @@ await check('主布局：菜单按角色过滤，经办人看不到工作台与�
     return html;
   };
 
-  // 业务经办人：只应看到大盘。菜单里不得出现工作台与规则，
+  // 业务经办人：只应看到大盘 + 审查报告。菜单里不得出现工作台与规则，
   // 否则用户点进去会被守卫弹回，表现为"系统坏了"。
   const businessHtml = await renderForRole('business_user');
   if (!businessHtml.includes('合同审查大盘')) {
@@ -1022,6 +1022,10 @@ await check('主布局：菜单按角色过滤，经办人看不到工作台与�
   }
   if (businessHtml.includes('合规规则与模板')) {
     throw new Error('经办人不应看到「合规规则与模板」菜单入口');
+  }
+  // 经办人必须能看到只读报告入口，否则提交后看不到自己的审查结果
+  if (!businessHtml.includes('审查报告')) {
+    throw new Error('经办人应能看到「审查报告」入口（只读结果）');
   }
   if (!businessHtml.includes('业务经办人')) {
     throw new Error('经办人角色标签应显示「业务经办人」');
@@ -1035,20 +1039,28 @@ await check('主布局：菜单按角色过滤，经办人看不到工作台与�
   if (lawHtml.includes('合规规则与模板')) {
     throw new Error('法务不应看到「合规规则与模板」菜单入口');
   }
+  if (!lawHtml.includes('审查报告')) {
+    throw new Error('法务应能看到「审查报告」入口');
+  }
   if (!lawHtml.includes('法务审查人')) {
     throw new Error('法务角色标签应显示「法务审查人」');
   }
 
-  // 系统管理员：三项导航全部可见
+  // 系统管理员：四项导航全部可见
   const adminHtml = await renderForRole('admin');
-  for (const label of ['合同审查大盘', '智能审查工作台', '合规规则与模板']) {
+  for (const label of [
+    '合同审查大盘',
+    '智能审查工作台',
+    '合规规则与模板',
+    '审查报告',
+  ]) {
     if (!adminHtml.includes(label)) {
       throw new Error(`管理员应能看到「${label}」菜单入口`);
     }
   }
 
   await clearAuthUser();
-  return '经办人仅见大盘、法务见大盘+工作台、管理员全见，菜单与路由守卫口径一致';
+  return '经办人见大盘+报告、法务见大盘+工作台+报告、管理员全见，菜单与路由守卫口径一致';
 });
 
 await check('规则页渲染：规则树、详情区、条款库三区块齐全', async () => {
@@ -1315,6 +1327,103 @@ await check('底栏渲染：只写评论、无任何审批动作按钮', async (
     }
   }
   return `7 项必需能力齐备，${forbidden.length} 类审批动作入口全部缺席`;
+});
+
+await check('审查报告页：只读展示结论与下载，无任何写操作入口', async () => {
+  const React = (await import('react')).default;
+  const { renderToString } = await import('react-dom/server');
+  const { ConfigProvider, App: AntdApp } = await import('antd');
+  const { MemoryRouter, Routes, Route } = await import('react-router-dom');
+  const ReportPage = (await load('/src/pages/ReportPage.tsx')).default;
+
+  // 说明：ReportPage 在挂载后异步拉取数据，renderToString 只能拿到
+  // 首帧（加载态），无法验证结论区。因此这里改为直接渲染组件并断言
+  // 「源码层面不存在写操作能力」——这是本页最关键的约束（权责红线），
+  // 比首帧文案更重要，也更稳定（不受接口时序影响）。
+  //
+  // 取源码的方式与脚本内其他用例保持一致：在回调内动态 import node:fs，
+  // 用相对 cwd 的路径读取。不要用 __dirname / resolve —— 本脚本是 ESM，
+  // 两者均未定义（此前正是这个疏漏导致该用例恒抛 readFileSync is not defined）。
+  const fs = await import('node:fs');
+  const source = fs.readFileSync('src/pages/ReportPage.tsx', 'utf8');
+
+  // 首帧渲染不报错（验证组件可正常挂载）
+  const html = renderToString(
+    React.createElement(
+      ConfigProvider,
+      null,
+      React.createElement(
+        AntdApp,
+        null,
+        React.createElement(
+          MemoryRouter,
+          { initialEntries: ['/report/TEST-001'] },
+          React.createElement(
+            Routes,
+            null,
+            React.createElement(Route, {
+              path: '/report/:taskNo',
+              element: React.createElement(ReportPage),
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+  if (!html || html.length < 50) {
+    throw new Error('审查报告页首帧渲染失败');
+  }
+
+  // ---- 契约一：必须提供的能力（只读视角） ----
+  const requiredInSource = [
+    ['审查结论', '结论区块'],
+    ['风险摘要', '风险摘要区块'],
+    ['handleDownload', '报告下载能力'],
+    ['规则引擎', '定级来源声明'],
+    ['只读', '只读声明'],
+  ];
+  for (const [text, label] of requiredInSource) {
+    if (!source.includes(text)) {
+      throw new Error(`审查报告页缺少${label}「${text}」`);
+    }
+  }
+
+  // ---- 契约二：严禁出现的写操作（权责红线的物理保证） ----
+  // 这些是工作台独有能力，经办人报告页一旦出现即为越权入口。
+  //
+  // 【必须先剥离注释再扫描（重要）】
+  // 本页头部注释**主动声明**了"刻意不含审批回写 / 触发审查 / 风险项编辑等能力"，
+  // 这恰恰是值得保留的设计说明。若连注释一起扫，会把这种正面声明误判成违规
+  // （本用例此前就是这样恒失败的）。契约检查要回答的是
+  // "真实代码是否具备该能力"，因此只在剥离注释后的代码文本上判定。
+  const codeOnly = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')      // 去掉块注释 /* ... */
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1'); // 去掉行注释 // ...（[^:] 避开 http://）
+
+  const forbiddenInSource = [
+    ['writeBack', '审批回写'],
+    ['previewComment', '评论预览'],
+    ['editRiskItem', '风险项编辑'],
+    ['触发审查', '触发审查'],
+    ['reviewApi.trigger', '审查触发接口'],
+  ];
+  for (const [text, label] of forbiddenInSource) {
+    if (codeOnly.includes(text)) {
+      throw new Error(
+        `审查报告页出现${label}能力「${text}」，违反只读约束（越权风险）`,
+      );
+    }
+  }
+
+  // ---- 契约三：审批动作文案一律不得出现 ----
+  const forbiddenTexts = ['审批通过', '驳回', '转办', '撤回', '加签'];
+  for (const text of forbiddenTexts) {
+    if (codeOnly.includes(text)) {
+      throw new Error(`审查报告页出现审批动作「${text}」，违反权责红线`);
+    }
+  }
+
+  return `首帧渲染 ${html.length} 字符；5 项只读能力齐备；${forbiddenInSource.length} 类写操作与 ${forbiddenTexts.length} 类审批动作全部缺席`;
 });
 
 await check('上传弹窗渲染：三步流程与元数据字段齐全', async () => {

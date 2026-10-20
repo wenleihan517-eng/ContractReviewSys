@@ -413,6 +413,25 @@ def _build_initial_state(
         raw_amount = auto_meta.get("amount")
     contract_amount = float(raw_amount or 0.0)
 
+    # 合同类型取值链：审批单 > 自动识别（关键词轻量识别）> other
+    # 【2026-09-21 修复｜规则静默漏检】
+    #   此处原先只读审批单上下文，手动上传任务（无审批单，即"上传免填表单"
+    #   改造后的唯一入口）恒得 "other"。而规则集是按 contract_type 过滤加载的
+    #   （见 _load_active_rule_templates），口径错成 other 会直接导致类型专属
+    #   规则整体不加载：
+    #       purchase 26 条 → other 16 条
+    #       PAY-001 / IP-001（付款与知识产权，规格 2.4.9 场景一必须命中）
+    #       PUR-001 / PUR-002（缺失交付验收 / 质量保证）全部缺席
+    #   结果是"规则引擎正常执行、无任何报错，但该命中的风险没命中"——
+    #   属最危险的静默失效。解析阶段已把识别结果写入
+    #   parse_snapshot.auto_metadata.contract_type，故必须与 contract_title /
+    #   amount / counterparty 一样纳入同一兜底链，保持口径一致。
+    contract_type = (
+        approval_ctx.get("contract_type")
+        or auto_meta.get("contract_type")
+        or "other"
+    ).strip()
+
     # 自动识别的备注信息（用于任务追溯：哪些字段是系统识别的）
     auto_notes: List[str] = list(snapshot.get("auto_notes") or [])
 
@@ -451,7 +470,7 @@ def _build_initial_state(
         currency=(approval_ctx.get("currency") or auto_meta.get("currency") or "CNY").strip(),
         performance_period=(approval_ctx.get("performance_period") or "").strip(),
         business_type=(approval_ctx.get("business_type") or "").strip(),
-        contract_type=(approval_ctx.get("contract_type") or "other").strip(),
+        contract_type=contract_type,
         template_flag=bool(approval_ctx.get("template_flag") or False),
         source_type=source_type,
         file_object_key=object_key,

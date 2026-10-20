@@ -20,12 +20,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 
+from app.constants import PERM_BLOCKED_TASK_HANDLE, PERM_TASK_VIEW_ALL
 from app.core.config import settings
 from app.core.dependencies import (
     CurrentUser,
+    assert_task_access,
     get_current_request_id,
     get_current_user,
-    get_current_user_optional,
+    require_permissions,
 )
 from app.core.exceptions import BusinessException, ErrorCode, FileUploadException
 from app.core.logging_config import get_logger
@@ -50,7 +52,7 @@ router = APIRouter(prefix="/tasks", tags=["审查任务"])
 @router.post("", summary="创建审查任务", description="提交合同创建审查任务，自动执行差异化路由决策。")
 async def create_task(
     body: TaskCreateRequest,
-    user: Optional[CurrentUser] = Depends(get_current_user_optional),
+    user: CurrentUser = Depends(get_current_user),
 ) -> ApiResponse:
     """
     创建审查任务
@@ -64,10 +66,16 @@ async def create_task(
     说明：
         必须把登录用户名写入 created_by，否则下游报告生成/下载、
         评论回写等接口的所有者校验会因比对不上而误判为越权（403）。
+
+        【2026-09-21 加固】user 由 optional 改为必填：
+        原先依赖可选用户，一旦取不到就写入 owner=None，
+        该任务此后对任何人都不满足归属校验（fail-closed），
+        表现为"自己提交的合同打不开自己的报告"。
+        中间件已强制登录，这里用必填既更安全，也杜绝空归属数据。
     """
     from app.services import task_service
 
-    owner = user.username if user is not None else None
+    owner = user.username
     task_id, task_no = await task_service.create_task(body, owner=owner)
     return success_response(
         data=TaskCreateResponse(task_id=task_id, task_no=task_no).model_dump(),
@@ -133,13 +141,19 @@ async def list_tasks(
     )
 
 
-@router.get("/approval-pending", summary="拉取审批待办", description="查询已完成审查、待进入人工审批环节的任务。")
+@router.get("/approval-pending", summary="拉取审批待办", description="查询已完成审查、待进入人工审批环节的任务。",
+            dependencies=[Depends(require_permissions(PERM_TASK_VIEW_ALL))])
 async def approval_pending(
     page: int = Query(default=1, ge=1, description="页码"),
     page_size: int = Query(default=20, ge=1, le=200, description="每页条数"),
 ) -> ApiResponse:
     """
     拉取审批待办
+
+    【权限（2026-09-21 补全）】需 task:view_all（法务审查人 / 系统管理员）。
+    该接口返回**全量**待审批任务（无归属过滤），属法务的审批工作队列；
+    业务经办人调用返回 403 —— 其职责边界不含"审批"，
+    且全量列表会泄露他人合同标题。
 
     出参：
         data: 分页结果（items 为 ApprovalPendingItem 列表）
@@ -230,7 +244,7 @@ async def get_task_detail(
 async def retry_task(
     task_no: str,
     body: TaskRetryRequest,
-    user: Optional[CurrentUser] = Depends(get_current_user_optional),
+    user: CurrentUser = Depends(get_current_user),
 ) -> ApiResponse:
     """
     任务重试
@@ -238,22 +252,34 @@ async def retry_task(
     入参：
         task_no: 任务编号（路径参数）
         body: TaskRetryRequest
-        user: 当前登录用户（用于操作留痕）
+        user: 当前登录用户（用于权限校验与操作留痕）
     出参：
         data: TaskRetryResponse（resumed / message）
+
+    权限（2026-09-21 补全）：
+        任务提交人本人，或拥有 task:view_all 的法务/管理员。
+        此前该接口使用 get_current_user_optional 且无归属校验，
+        任意登录用户可重跑他人任务（会覆盖他人任务的审查状态）。
+
+    说明：
+        任务不存在时保持原有语义（返回 resumed=false 而非报错），
+        仅在任务存在且不属于当前用户时拒绝，避免改变既有排查行为。
     """
     from app.services import task_service
 
+    task = await task_service.get_task_by_id(task_no)
+    if task is not None:
+        assert_task_access(user, task, action="retry_task")
+
     ok, message = await task_service.retry_task(task_no)
     # 操作留痕：记录操作人 / 结果（2026-09-20 数据与流程闭环）
-    if user is not None:
-        await task_service.record_task_operation(
-            task_no=task_no,
-            operator=user.username,
-            action="retry",
-            result="accepted" if ok else "failed",
-            detail=message,
-        )
+    await task_service.record_task_operation(
+        task_no=task_no,
+        operator=user.username,
+        action="retry",
+        result="accepted" if ok else "failed",
+        detail=message,
+    )
     return success_response(
         data=TaskRetryResponse(task_no=task_no, resumed=ok, message=message).model_dump(),
         message="任务重试受理" if ok else "任务重试失败",
@@ -372,7 +398,8 @@ async def replace_file(
     )
 
 
-@router.post("/{task_no}/resolve", summary="处理阻塞任务", description="对 blocked 任务执行重跑或驳回处理。")
+@router.post("/{task_no}/resolve", summary="处理阻塞任务", description="对 blocked 任务执行重跑或驳回处理。",
+             dependencies=[Depends(require_permissions(PERM_BLOCKED_TASK_HANDLE))])
 async def resolve_blocked(task_no: str, body: BlockedTaskResolveRequest) -> ApiResponse:
     """
     处理阻塞任务
@@ -382,6 +409,16 @@ async def resolve_blocked(task_no: str, body: BlockedTaskResolveRequest) -> ApiR
         body: BlockedTaskResolveRequest（action=retry/dismiss）
     出参：
         data: BlockedTaskResolveResponse
+
+    权限（2026-09-21 补全）：
+        需 blocked_task:handle（系统管理员）。
+        阻塞任务处理含"驳回（dismiss）"这类终局动作，
+        按角色定义属管理员职责，法务与经办人均不可调用。
+
+    与 /retry 的区别：
+        /retry 是"重新跑一遍"，任务提交人本人即可触发（修正自己提交的材料）；
+        /resolve 是"对阻塞任务做处置决策"（重跑或驳回置 failed），
+        权限更收敛，仅管理员。
     """
     from app.services import task_service
 

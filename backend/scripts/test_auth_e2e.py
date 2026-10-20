@@ -741,10 +741,24 @@ async def test_permission_check() -> None:
     R.check("管理员可系统监控", adm.has_permission("system:monitor"))
 
     # F2. 水平越权防护
-    R.check("业务经办人查询过滤自己的任务",
-            build_owner_filter(biz) == {"created_by": "u-biz"}, str(build_owner_filter(biz)))
+    #
+    # 【字段约定（2026-09-21 修正）】
+    # 归属过滤与归属校验必须使用 **username**（账号名），因为任务主档的
+    # created_by 实际存的就是账号名（如 "user_business"），不是 ObjectId。
+    # 此前 build_owner_filter 返回 user_id，与真实存储不符 ——
+    # 一旦被真实调用，业务经办人会**查不到自己的任务**。
+    R.check("业务经办人查询过滤自己的任务（归属用账号名）",
+            build_owner_filter(biz) == {"created_by": "user_business"},
+            str(build_owner_filter(biz)))
     R.check("法务查询不过滤（可看全部）", build_owner_filter(law) == {}, str(build_owner_filter(law)))
     R.check("管理员查询不过滤", build_owner_filter(adm) == {})
+
+    # 归属校验需同时兼容两种存储约定：username（任务主档）与 user_id（其他集合）
+    try:
+        assert_resource_owner(biz, "user_business")
+        R.check("归属校验认 username（真实 created_by 约定）", True)
+    except ForbiddenException:
+        R.check("归属校验认 username（真实 created_by 约定）", False)
 
     try:
         assert_resource_owner(biz, "u-OTHER")

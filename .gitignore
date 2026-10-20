@@ -76,3 +76,4 @@ backend/_tmp_probe/
 
 # ------------------------- 本地运行态 PID 记录 -------------------------
 storage/local_run_pids.json
+*.env.bak-*

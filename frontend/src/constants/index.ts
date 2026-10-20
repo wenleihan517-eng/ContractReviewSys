@@ -439,6 +439,52 @@ export const USER_ROLE_TAG_COLOR: Record<UserRole, string> = {
 };
 
 /**
+ * 角色主色值（十六进制）
+ *
+ * 【与 USER_ROLE_TAG_COLOR 的分工（务必分清）】
+ *   USER_ROLE_TAG_COLOR 存的是 antd Tag 的**预设色名**（'blue' / 'green' / 'gold'），
+ *   只能交给 `<Tag color={...}>` 使用；而按钮边框与文字、头像底色等
+ *   需要**真实色值**的场景无法复用它，必须用本表。
+ *   两表语义完全一致（同一角色同一颜色），新增/调整角色配色时须同步维护。
+ *
+ * 【色值来源（已用浏览器实测 antd 渲染结果校准，勿凭记忆改）】
+ *   直接取 antd 5 的 Tag 预设色中该色系的**正文色**（即 -7 档）：
+ *     blue  #0958d9 / green #389e0d / gold #d48806
+ *   注意 blue 的正文色是 #0958d9 而**不是**主色 #1677ff——
+ *   antd 的预设 Tag 用 -7 档作正文色以保证对比度。
+ *   这样"角色按钮"与"角色标签"在同一页面上是完全同一个颜色。
+ */
+export const USER_ROLE_COLOR_HEX: Record<UserRole, string> = {
+  /** 业务经办人：蓝（antd blue-7，与角色标签正文色一致） */
+  business_user: '#0958d9',
+  /** 法务审查人：绿 */
+  law_user: '#389e0d',
+  /** 系统管理员：金 */
+  admin: '#d48806',
+};
+
+/**
+ * 角色头像渐变背景
+ *
+ * 【为什么仍用渐变而非纯色】
+ *   沿用顶栏头像原有的"135° 双色渐变"观感，只把色相换成角色色，
+ *   避免纯色圆块与紧邻的角色标签争夺视觉重心。
+ *
+ * 【明暗取值规则（三色统一）】
+ *   亮端取该色系第 6 档、暗端取第 7 档，即
+ *     blue  #1677ff → #0958d9
+ *     green #52c41a → #389e0d
+ *     gold  #faad14 → #d48806
+ *   暗端与 USER_ROLE_COLOR_HEX 完全一致，使"头像底色"与"按钮/标签"
+ *   收在同一个色相上；同时白色用户图标在渐变两端都有足够对比度。
+ */
+export const USER_ROLE_AVATAR_GRADIENT: Record<UserRole, string> = {
+  business_user: 'linear-gradient(135deg, #1677ff, #0958d9)',
+  law_user: 'linear-gradient(135deg, #52c41a, #389e0d)',
+  admin: 'linear-gradient(135deg, #faad14, #d48806)',
+};
+
+/**
  * 权限点常量（与后端 PERM_* 逐字对齐）
  *
  * 【权威源声明】
@@ -503,6 +549,16 @@ export const ROUTE_PATH = {
   DASHBOARD: '/dashboard',
   WORKBENCH: '/workbench',
   RULES: '/rules',
+  /**
+   * 审查报告（只读）
+   *
+   * 【为什么单独开一条路由而不复用工作台】
+   *   工作台是法务的作业面，含风险定级明细编辑、人工批注与审批回写，
+   *   这些能力对业务经办人属于越权（见"经办人职责边界止于提交与查看报告"）。
+   *   若让经办人进工作台再靠按钮隐藏来收权，一旦某个按钮漏藏就是越权事故；
+   *   因此物理隔离出只读报告页，从路由层面就不给经办人任何写操作入口。
+   */
+  REPORT: '/report',
 } as const;
 
 export type RoutePath = (typeof ROUTE_PATH)[keyof typeof ROUTE_PATH];
@@ -553,6 +609,18 @@ export const ROUTE_ALLOWED_ROLES: Record<string, UserRole[]> = {
   //   为避免"能看不能改"的误导性界面，此处按整体页面拦截，
   //   法务侧只在大盘/工作台通过风险详情间接看到规则命中信息
   [ROUTE_PATH.RULES]: [USER_ROLE.ADMIN],
+
+  // 审查报告（只读）：三种角色均可访问
+  //   经办人需要查看自己提交合同的审查结论与报告（report:download 权限已下发）；
+  //   法务与管理员需要复核/归档报告。
+  //   数据可见范围由后端按"任务提交人 / 法务 / 管理员"二次裁定，
+  //   因此前端放开路由不会造成跨用户越权：经办人即使手改 URL
+  //   也只能打开自己的任务（他人任务后端返回 403）。
+  [ROUTE_PATH.REPORT]: [
+    USER_ROLE.BUSINESS_USER,
+    USER_ROLE.LAW_USER,
+    USER_ROLE.ADMIN,
+  ],
 };
 
 /**
@@ -562,6 +630,7 @@ export const ROUTE_TITLE: Record<string, string> = {
   [ROUTE_PATH.DASHBOARD]: '合同审查大盘',
   [ROUTE_PATH.WORKBENCH]: '智能审查工作台',
   [ROUTE_PATH.RULES]: '合规规则与模板',
+  [ROUTE_PATH.REPORT]: '审查报告',
 };
 
 // ======================================================================

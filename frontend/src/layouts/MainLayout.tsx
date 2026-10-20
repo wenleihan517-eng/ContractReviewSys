@@ -54,6 +54,7 @@ import type { MenuProps } from 'antd';
 import {
   AuditOutlined,
   FileSearchOutlined,
+  FileTextOutlined,
   LogoutOutlined,
   MenuOutlined,
   ProfileOutlined,
@@ -66,6 +67,7 @@ import {
   ROLE_HOME_PATH,
   ROUTE_ALLOWED_ROLES,
   ROUTE_PATH,
+  USER_ROLE_AVATAR_GRADIENT,
   USER_ROLE_LABEL,
   USER_ROLE_TAG_COLOR,
 } from '@/constants';
@@ -107,6 +109,16 @@ const NAV_ITEMS: NavItem[] = [
     label: '合规规则与模板',
     icon: <SafetyCertificateOutlined />,
     hint: '按合同类型维护审查规则与示范条款库',
+  },
+  // 审查报告（只读）：三种角色均可见
+  //   经办人从这里查看自己提交合同的审查结论与报告；
+  //   法务/管理员用于复核与归档。该入口是「只读」的，
+  //   所有写操作（批注/回写/风险项编辑）仍只存在于工作台。
+  {
+    key: ROUTE_PATH.REPORT,
+    label: '审查报告',
+    icon: <FileTextOutlined />,
+    hint: '查看审查结论、风险摘要并下载报告（只读）',
   },
 ];
 
@@ -212,6 +224,24 @@ export default function MainLayout(): React.ReactElement {
     ],
     [user?.display_name, user?.username, user?.department],
   );
+
+  /**
+   * 顶栏头像的渐变底色（按角色取色）
+   *
+   * 参数：无
+   *
+   * 返回：
+   *   string：可直接赋给 style.background 的 CSS 渐变值
+   *
+   * 说明：
+   *   头像底色与紧邻的角色标签同色系，让"这个人是什么角色"在不读文字时
+   *   也能被颜色一眼识别，同时与登录页三角色快捷按钮的配色形成呼应。
+   *   未登录（user 为 null）或未来出现未知角色值时，一律回退到
+   *   业务经办人配色，保证头像永远不会渲染成透明。
+   */
+  const avatarGradient =
+    (user && USER_ROLE_AVATAR_GRADIENT[user.role]) ||
+    USER_ROLE_AVATAR_GRADIENT.business_user;
 
   /**
    * 用户下拉菜单点击处理
@@ -383,8 +413,8 @@ export default function MainLayout(): React.ReactElement {
                 <Avatar
                   size={28}
                   style={{
-                    background:
-                      'linear-gradient(135deg, #1677ff, #0b5ed7)',
+                    // 头像底色随角色变化（与右侧角色标签同色系）
+                    background: avatarGradient,
                     flexShrink: 0,
                   }}
                   icon={<UserOutlined />}

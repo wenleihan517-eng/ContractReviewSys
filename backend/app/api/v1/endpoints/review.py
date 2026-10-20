@@ -12,11 +12,26 @@
     风险等级 / 处理决策 / 严重度由规则引擎产出，接口层不提供定级写入入口。
     人工编辑仅允许修改建议类字段（suggestion_text / legal_basis / recommended_text），
     不允许修改判定字段。
+
+【鉴权约定（2026-09-21 补全）】
+    本模块此前缺少接口级鉴权，仅靠全局登录中间件保护，导致业务经办人
+    枚举 task_no 即可读取他人合同的审查结论（水平越权）。
+    现按"能力 + 归属"两层补齐：
+      · 读类（result）      → 任务归属校验（本人 / task:view_all）
+      · 触发类（trigger）   → 任务归属校验（本人 / task:view_all）
+      · 判定类修改（risk-items）→ 权限点 risk_item:edit（法务 / 管理员）
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-from app.core.dependencies import get_current_request_id
+from app.constants import PERM_RISK_ITEM_EDIT
+from app.core.dependencies import (
+    CurrentUser,
+    assert_task_access,
+    get_current_request_id,
+    get_current_user,
+    require_permissions,
+)
 from app.core.exceptions import BusinessException, ErrorCode
 from app.core.logging_config import get_logger
 from app.core.response import ApiResponse, success_response
@@ -38,17 +53,34 @@ router = APIRouter(prefix="/review", tags=["风险审查"])
 
 @router.post("/{task_id}/trigger", summary="触发审查",
              description="对指定任务触发风险审查（规则引擎 + 向量 + 大模型多路召回），同步执行并落库结论。")
-async def trigger_review(task_id: str, body: ReviewTriggerRequest) -> ApiResponse:
+async def trigger_review(
+    task_id: str,
+    body: ReviewTriggerRequest,
+    user: CurrentUser = Depends(get_current_user),
+) -> ApiResponse:
     """
     触发审查
 
     入参：
         task_id: 任务 ID（路径参数）
         body: ReviewTriggerRequest
+        user: 当前登录用户（用于任务归属校验）
     出参：
         data: ReviewTriggerResponse（accepted / message / 判定摘要）
+
+    权限：
+        任务提交人本人，或拥有 task:view_all 的法务/管理员；
+        其他用户返回 403 —— 防止经办人触发他人任务的审查。
     """
-    from app.services import orchestration_service
+    from app.services import orchestration_service, task_service
+
+    # 先取任务用于归属校验：不存在的任务保持原有 404 语义
+    task = await task_service.get_task_by_id(task_id)
+    if task is None:
+        raise BusinessException(
+            code=ErrorCode.NOT_FOUND, message=f"任务不存在：{task_id}", http_status=404
+        )
+    assert_task_access(user, task, action="trigger_review")
 
     outcome = await orchestration_service.trigger_review(
         task_id=task_id,
@@ -69,14 +101,23 @@ async def trigger_review(task_id: str, body: ReviewTriggerRequest) -> ApiRespons
 
 
 @router.get("/{task_id}/result", summary="审查结果查询", description="查询指定任务的审查结果（风险项/结论/等级分布）。")
-async def review_result(task_id: str) -> ApiResponse:
+async def review_result(
+    task_id: str,
+    user: CurrentUser = Depends(get_current_user),
+) -> ApiResponse:
     """
     审查结果查询
 
     入参：
         task_id: 任务 ID（路径参数）
+        user: 当前登录用户（用于任务归属校验）
     出参：
         data: ReviewResultResponse（风险项列表/结论/等级分布）
+
+    权限：
+        任务提交人本人，或拥有 task:view_all 的法务/管理员。
+        其他用户返回 403 —— 审查结论含合同风险明细，属敏感数据，
+        不能因为"知道 task_no"就允许读取（水平越权防护）。
     """
     from app.services import task_service
 
@@ -85,6 +126,10 @@ async def review_result(task_id: str) -> ApiResponse:
         raise BusinessException(
             code=ErrorCode.NOT_FOUND, message=f"任务不存在：{task_id}", http_status=404
         )
+
+    # 【红线】归属校验必须在读取结论之前：
+    # 审查结论 / 风险项属敏感数据，先查后拒同样构成信息泄露。
+    assert_task_access(user, task, action="view_review_result")
 
     # 统一取任务真实 _id：入参可能是 task_no（前端工作台以编号调用），
     # 而结论/风险集合以 _id 为归属键，必须用 canonical_id 查询，否则查空。
@@ -143,13 +188,18 @@ async def review_result(task_id: str) -> ApiResponse:
 
 
 @router.put("/risk-items/{risk_id}", summary="人工编辑风险项",
-            description="人工修改风险项的建议与法律依据（不允许修改风险等级等判定字段）。")
+            description="人工修改风险项的建议与法律依据（不允许修改风险等级等判定字段）。",
+            dependencies=[Depends(require_permissions(PERM_RISK_ITEM_EDIT))])
 async def edit_risk_item(risk_id: str, body: RiskItemEditRequest) -> ApiResponse:
     """
     人工编辑风险项
 
     【权责红线】仅允许修改 suggestion_text / legal_basis 建议类字段，
     不允许修改 risk_level / decision / severity 判定字段。
+
+    【权限】需 risk_item:edit（法务审查人 / 系统管理员）。
+    业务经办人无该权限点 → 403。风险项编辑属法务复核职责，
+    经办人的职责边界止于"提交合同"与"查看报告"。
 
     入参：
         risk_id: 风险项 ID（路径参数）
@@ -185,10 +235,14 @@ async def edit_risk_item(risk_id: str, body: RiskItemEditRequest) -> ApiResponse
 
 
 @router.put("/risk-items/{risk_id}/recommend", summary="人工修改推荐条款",
-            description="人工修订示范修改条款文本。")
+            description="人工修订示范修改条款文本。",
+            dependencies=[Depends(require_permissions(PERM_RISK_ITEM_EDIT))])
 async def update_recommend(risk_id: str, body: ClauseRecommendRequest) -> ApiResponse:
     """
     人工修改推荐条款
+
+    【权限】需 risk_item:edit（法务审查人 / 系统管理员）；
+    业务经办人返回 403（推荐条款属法务复核产出）。
 
     入参：
         risk_id: 风险项 ID（路径参数）

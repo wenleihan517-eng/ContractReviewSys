@@ -897,17 +897,84 @@ def assert_resource_owner(
     if user.can_view_all_tasks:
         return
 
-    if resource_owner_id is None or str(resource_owner_id) != str(user.user_id):
-        logger.warning(
-            "资源归属校验未通过（疑似水平越权）| username=%s | 用户id=%s | 资源归属=%s",
-            user.username,
-            user.user_id,
-            resource_owner_id,
-        )
-        raise ForbiddenException(
-            message="无权访问他人提交的资源",
-            code=ErrorCode.PERMISSION_DENIED,
-        )
+    # 【字段约定（易错点，勿改）】
+    # 归属字段在不同集合的存法不同，必须同时比对两种：
+    #   - created_by 存 **username**（如 "user_business"）
+    #     —— 任务主档 ReviewTask 采用此约定，见 task_service 创建任务处；
+    #   - 部分集合存 **user_id**（ObjectId 的十六进制字符串）。
+    # 历史缺陷：本函数早期只比对 user_id，而调用方传入的却是 created_by（username），
+    # 两者永不相等 → 非特权用户被无差别拒绝。因该函数当时无人调用才未暴露。
+    # 修正为"两者任一命中即视为归属本人"，兼容两种存储约定。
+    owner_ref = "" if resource_owner_id is None else str(resource_owner_id)
+    if owner_ref and owner_ref in (user.username, user.user_id):
+        return
+
+    logger.warning(
+        "资源归属校验未通过（疑似水平越权）| username=%s | 用户id=%s | 资源归属=%s",
+        user.username,
+        user.user_id,
+        owner_ref or "(空)",
+    )
+    raise ForbiddenException(
+        message="无权访问他人提交的资源",
+        code=ErrorCode.PERMISSION_DENIED,
+    )
+
+
+def assert_task_access(user: CurrentUser, task: Any, action: str = "access") -> None:
+    """
+    校验当前用户是否有权访问该审查任务（任务级归属校验）
+
+    规则：
+        1. 拥有 task:view_all 权限者（法务审查人 / 系统管理员）直接放行；
+        2. 其余角色（业务经办人）仅当 task.created_by 等于本人账号时放行；
+        3. 归属字段为空的任务，非特权用户一律拒绝（fail-closed）——
+           无法证明归属时宁可拒绝，也不能放行。
+
+    参数：
+        user:   当前登录用户
+        task:   审查任务模型（需具备 created_by / task_no 字段）
+        action: 操作标识（view_result / trigger_parse / retry ...），仅用于日志与文案
+
+    返回：
+        无
+
+    异常：
+        ForbiddenException（HTTP 403，错误码 60009）：无权访问他人任务时抛出
+
+    使用示例：
+        task = await task_service.get_task_by_id(task_id)
+        if task is None:
+            raise BusinessException(code=ErrorCode.NOT_FOUND, ...)
+        assert_task_access(user, task, action="view_review_result")
+
+    说明：
+        【为什么必须显式调用】
+        全局登录中间件只回答"有没有登录"，require_permissions 只回答
+        "能不能用这个功能"，都不回答"能不能碰这条数据"。
+        凡是路径里带具体 task_id / risk_id 的接口，都必须调用本函数，
+        否则业务经办人只要枚举 task_no 就能读到他人合同的审查结论。
+    """
+    if user.can_view_all_tasks:
+        return
+
+    owner_ref = (getattr(task, "created_by", "") or "").strip()
+    if owner_ref and owner_ref in (user.username, user.user_id):
+        return
+
+    task_no = getattr(task, "task_no", None) or getattr(task, "id", "?")
+    logger.warning(
+        "任务归属校验未通过（疑似水平越权）| 操作=%s | 用户=%s(%s) | 任务=%s | 提交人=%s",
+        action,
+        user.username,
+        user.role,
+        task_no,
+        owner_ref or "(空)",
+    )
+    raise ForbiddenException(
+        message="无权访问该任务：业务经办人仅可访问本人提交的合同",
+        code=ErrorCode.PERMISSION_DENIED,
+    )
 
 
 def build_owner_filter(user: CurrentUser, field_name: str = "created_by") -> dict:
@@ -931,10 +998,18 @@ def build_owner_filter(user: CurrentUser, field_name: str = "created_by") -> dic
         把"是否过滤"的决策收口到本函数，避免每个查询点各写一遍
         if user.role == "admin" 之类的判断——那种写法一旦漏写，
         业务经办人就能看到全部任务，且不易被测试发现。
+
+         【字段取值（易错点，勿改）】
+         返回的归属值用 **username** 而非 user_id —— 因为任务主档的
+         created_by 存的是账号名（如 "user_business"），不是 ObjectId。
+         历史缺陷：本函数曾返回 user_id，与 created_by 的实际存储不符，
+         一旦被真实调用会导致业务经办人**永远查不到自己的任务**。
+         若某集合确实以 user_id 为归属键，请显式传入 field_name 并在此补充说明，
+         不要改动本函数的默认行为。
     """
     if user.can_view_all_tasks:
         return {}
-    return {field_name: user.user_id}
+    return {field_name: user.username}
 
 
 def get_permission_matrix() -> dict:

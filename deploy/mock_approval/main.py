@@ -25,6 +25,8 @@
     POST /comments/batch              批量写入评论（白名单）
     GET  /comments                    查询已收到的评论
     GET  /approval/{task_no}          查询审批单信息（模拟）
+    POST /approvals                   显式创建/覆盖模拟审批单（演练"审批单提供业务字段"）
+    GET  /approvals                   列出全部模拟审批单
     POST /approve                     动作类接口 → 403（红线拦截）
     POST /reject                      动作类接口 → 403（红线拦截）
     POST /transfer                    动作类接口 → 403（红线拦截）
@@ -457,14 +459,28 @@ async def get_approval(task_no: str) -> Dict[str, Any]:
             "status": "pending",
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "comment_count": 0,
-            # 以下字段模拟真实审批系统会提供的业务上下文，
-            # 对应 ReviewTask 需要的申请人、业务类型、合同金额等
+            # 只提供"审批流程"侧的真实字段（申请人 / 业务类型 / 状态）。
+            #
+            # 【2026-09-21 修复｜伪造字段会静默覆盖合同原件识别结果】
+            #   此处原先还伪造了 contract_amount=1200000.0 / contract_type /
+            #   counterparty。这三个字段在审查系统侧是"审批单优先于合同原件
+            #   自动识别"的（见 orchestration_service._build_initial_state 的
+            #   取值链），因此伪造值会直接顶掉从合同原文识别出的真实值：
+            #     · sample2 大额销售合同真实金额 1200 万 → 被改成 120 万，
+            #       而 NUM-004（大额合同，阈值 500 万）因此永不命中；
+            #     · contract_type 被固定为 purchase，掩盖合同类型识别结果。
+            #   结果是 docs/demo_samples/README.md 中已实测记录的命中集合
+            #   （样本2：['BAL-004','NUM-004']）无法复现，而链路全程无报错 ——
+            #   属于典型的静默失效。
+            #
+            #   审批单不应臆造自己无从得知的业务事实；真实审批系统里
+            #   金额由申请人在单据上填写，与合同原文不一致时应当由业务侧
+            #   澄清，而不是由模拟服务凭空生成一个"看起来合理"的数字。
+            #   故自动创建的占位审批单不再提供 contract_amount /
+            #   contract_type / counterparty，交由审查系统按合同原文识别兜底；
+            #   需要演练"审批单提供业务字段"时，请通过 POST /approvals 显式建单。
             "applicant": "演示用户",
             "business_type": "purchase",
-            "contract_amount": 1200000.0,
-            "counterparty": "演示供应商有限公司",
-            "contract_type": "purchase",
-            "template_flag": False,
             "auto_created": True,
         }
 
@@ -489,6 +505,80 @@ async def list_approvals() -> Dict[str, Any]:
             "total": len(_APPROVALS),
             "items": list(_APPROVALS.values()),
         },
+    }
+
+
+class ApprovalUpsertRequest(BaseModel):
+    """显式建单请求体
+
+    说明：
+        全部业务字段可选。只在**确实需要演练"审批单提供业务字段"**时填写；
+        留空则不写入，由审查系统按合同原文自动识别兜底。
+    """
+
+    task_no: str = Field(..., min_length=1, description="审批单号 / 审查任务号")
+    applicant: Optional[str] = Field(default=None, description="申请人")
+    business_type: Optional[str] = Field(default=None, description="业务类型")
+    contract_title: Optional[str] = Field(default=None, description="合同标题")
+    contract_no: Optional[str] = Field(default=None, description="合同编号")
+    contract_type: Optional[str] = Field(default=None, description="合同类型")
+    contract_amount: Optional[float] = Field(
+        default=None, description="合同金额（元）；不填表示不由审批单提供"
+    )
+    counterparty: Optional[str] = Field(default=None, description="合同相对方")
+    template_flag: Optional[bool] = Field(default=None, description="是否模板合同")
+
+
+@app.post(
+    "/approvals",
+    summary="显式创建/覆盖模拟审批单",
+    description=(
+        "按任务号创建（或覆盖）一条模拟审批单，用于演练"
+        "「审批单提供合同业务字段」的链路。未提供的字段保持缺省，"
+        "由审查系统按合同原文自动识别兜底。"
+    ),
+)
+async def upsert_approval(payload: ApprovalUpsertRequest) -> Dict[str, Any]:
+    """
+    显式创建或覆盖模拟审批单
+
+    【为什么需要这个接口】
+        自动创建的占位审批单**刻意不提供** contract_amount / contract_type /
+        counterparty —— 这类字段一旦被凭空生成，会在审查系统侧
+        （审批单优先于原件识别）顶掉从合同原文识别出的真实值，
+        导致规则命中集合被静默改写。因此需要一个"显式建单"入口，
+        让确需演练该链路的场景可以主动提供字段。
+
+    参数：
+        payload: 审批单字段（除 task_no 外均可选）
+
+    返回：
+        创建/覆盖后的审批单
+    """
+    record = {
+        "approval_no": payload.task_no,
+        "status": "pending",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "comment_count": 0,
+        "auto_created": False,
+    }
+    # 仅写入显式提供的字段，None 一律不落库（避免"缺省值"被当成业务事实）
+    for key in (
+        "applicant", "business_type", "contract_title", "contract_no",
+        "contract_type", "contract_amount", "counterparty", "template_flag",
+    ):
+        value = getattr(payload, key)
+        if value is not None:
+            record[key] = value
+
+    _APPROVALS[payload.task_no] = record
+    print(f"[模拟审批] 已显式建单 | 审批单={payload.task_no} | "
+          f"提供字段={[k for k in record if k not in ('approval_no', 'status', 'created_at', 'comment_count', 'auto_created')]}")
+
+    return {
+        "code": 0,
+        "message": "审批单已创建",
+        "data": record,
     }
 
 

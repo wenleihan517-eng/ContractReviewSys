@@ -480,6 +480,11 @@ async def parse_document(state: ReviewTaskState) -> NodeResult:
     # -------------------- 条款切分与分类 --------------------
     clauses, unstructured_text = _split_clauses(full_text)
 
+    # -------------------- 回填条款真实页码 --------------------
+    # _split_clauses 无逐页信息，页码默认写 1；此处按文本块映射纠正，
+    # 保证"原文定位：第 X 页"在多页合同上真实可信（见 _assign_clause_pages）
+    _assign_clause_pages(clauses, text_blocks)
+
     # -------------------- 校验：必须切出有效条款 --------------------
     if not clauses:
         raise NonRetryableError(
@@ -962,6 +967,58 @@ def _split_clauses(full_text: str) -> Tuple[List[ClauseItem], str]:
             unstructured = f"{unstructured}\n{tail_text}".strip()
 
     return clauses, unstructured
+
+
+def _assign_clause_pages(
+    clauses: List[ClauseItem],
+    text_blocks: List[TextBlock],
+) -> None:
+    """
+    按文本块的实际页码范围回填条款的 page_start / page_end（原地修改）
+
+    【为什么必须回填（2026-09-21 修复｜页码溯源失真）】
+        `_split_clauses` 只拿到全文，没有逐页信息，因此把每条条款的
+        page_start / page_end 一律写成 1。对多页合同这会直接产出错误的页码：
+        实测 sample1（2 页）中第四条及之后的所有条款实际都在第 2 页，
+        却统一被标为"第 1 页"，于是报告「原文定位：第 1 页」与前端
+        风险卡「P1」全部显示错误页码（字符区间正确、页码错误，属最难察觉的
+        半对半错）。
+
+        文本块（TextBlock）在 `_build_text_blocks` 中已按页构建并携带
+        start_idx / end_idx / page，是全文偏移 → 页码的权威映射。
+        故此处用条款的 [char_start, char_end) 与文本块区间求交集，
+        取首个相交块与末个相交块的页码作为 page_start / page_end。
+        该函数与 `_split_clauses` 同层，不改变其签名（避免影响既有调用与测试）。
+
+    参数：
+        clauses: 条款列表（原地写回页码）
+        text_blocks: 文本块列表（须含 start_idx / end_idx / page）
+
+    返回：
+        None（原地修改 clauses）
+    """
+    if not clauses or not text_blocks:
+        return
+
+    ordered = sorted(text_blocks, key=lambda b: b.start_idx)
+
+    for clause in clauses:
+        first_page: Optional[int] = None
+        last_page: Optional[int] = None
+
+        for block in ordered:
+            # 无交集的块直接跳过（块区间与条款区间均为左闭右开）
+            if block.end_idx <= clause.char_start:
+                continue
+            if block.start_idx >= clause.char_end:
+                break
+            if first_page is None:
+                first_page = block.page
+            last_page = block.page
+
+        if first_page is not None:
+            clause.page_start = first_page
+            clause.page_end = last_page or first_page
 
 
 # ======================================================================

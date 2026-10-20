@@ -17,9 +17,10 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from app.core.dependencies import get_current_request_id
+from app.constants import PERM_RULE_TEMPLATE_MANAGE
+from app.core.dependencies import get_current_request_id, require_permissions
 from app.core.exceptions import BusinessException, ErrorCode
 from app.core.logging_config import get_logger
 from app.core.response import ApiResponse, page_response, success_response
@@ -34,7 +35,22 @@ from app.schemas.rule import (
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/rules", tags=["规则管理"])
+# 【鉴权（2026-09-21 补全）】
+# 规则模板是审查判定的依据资产，增删改会直接影响所有合同的定级结果，
+# 属最高敏感度配置。此前本模块所有接口均无鉴权，业务经办人可增删改规则
+# （等于能间接操纵全系统的风险判定），是本次修复中最严重的一处。
+#
+# 采用 **router 级依赖** 而非逐接口添加：
+#   1. 该模块全部接口都属管理员职责，无例外；
+#   2. 逐接口添加容易在后续新增接口时漏加，router 级天然覆盖全部（含未来扩展）。
+#
+# 依据：ROLE_PERMISSIONS 中 rule_template:manage 仅 ADMIN 持有，
+#      前端 RulesPage 亦仅对 admin 开放（ROUTE_ALLOWED_ROLES[rules] = [admin]）。
+router = APIRouter(
+    prefix="/rules",
+    tags=["规则管理"],
+    dependencies=[Depends(require_permissions(PERM_RULE_TEMPLATE_MANAGE))],
+)
 
 
 @router.get("", summary="规则列表", description="按合同类型查询规则模板列表（含停用规则）。")

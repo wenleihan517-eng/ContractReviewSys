@@ -10,12 +10,24 @@
 【设计要点】
     - 文件上传用 multipart/form-data，保存至 MinIO 合同桶
     - 解析是异步任务的第一阶段，触发接口返回受理，结果异步查询
+
+【鉴权约定（2026-09-21 补全）】
+    本模块此前仅靠全局登录中间件保护，业务经办人枚举 task_no 即可
+    读取他人合同的解析原文（水平越权）。现补任务归属校验：
+      · trigger → 任务提交人本人，或 task:view_all（法务/管理员）
+        （经办人上传后需自行触发解析，因此必须允许"本人"）
+      · result  → 同上；解析原文含合同全文，属敏感数据
 """
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile
 
 from app.core.config import settings
-from app.core.dependencies import get_current_request_id
+from app.core.dependencies import (
+    CurrentUser,
+    assert_task_access,
+    get_current_request_id,
+    get_current_user,
+)
 from app.core.exceptions import BusinessException, ErrorCode, FileUploadException
 from app.core.logging_config import get_logger
 from app.core.response import ApiResponse, success_response
@@ -86,17 +98,34 @@ async def upload_file(file: UploadFile = File(..., description="合同文件")) 
 
 
 @router.post("/{task_id}/trigger", summary="触发解析", description="对指定任务触发文档解析（同步执行，返回解析统计）。")
-async def trigger_parse(task_id: str, body: ParseTriggerRequest) -> ApiResponse:
+async def trigger_parse(
+    task_id: str,
+    body: ParseTriggerRequest,
+    user: CurrentUser = Depends(get_current_user),
+) -> ApiResponse:
     """
     触发文档解析
 
     入参：
         task_id: 任务 ID（路径参数）
         body: ParseTriggerRequest（object_key / source_type / file_name）
+        user: 当前登录用户（用于任务归属校验）
     出参：
         data: ParseTriggerResponse（accepted / message / 解析统计）
+
+    权限：
+        任务提交人本人，或拥有 task:view_all 的法务/管理员。
+        经办人上传合同后需要触发解析，因此"本人"必须放行；
+        但不允许触发他人任务的解析（防止越权消耗算力与读取他人文件）。
     """
-    from app.services import orchestration_service
+    from app.services import orchestration_service, task_service
+
+    task = await task_service.get_task_by_id(task_id)
+    if task is None:
+        raise BusinessException(
+            code=ErrorCode.NOT_FOUND, message=f"任务不存在：{task_id}", http_status=404
+        )
+    assert_task_access(user, task, action="trigger_parse")
 
     # 兼容调用方把 object_key 传空的情况：编排层会回退读取任务主档中的缓存值
     outcome = await orchestration_service.trigger_parse(
@@ -118,14 +147,22 @@ async def trigger_parse(task_id: str, body: ParseTriggerRequest) -> ApiResponse:
 
 
 @router.get("/{task_id}/result", summary="解析结果查询", description="查询指定任务的解析结果（全文/文本块/条款/元数据）。")
-async def parse_result(task_id: str) -> ApiResponse:
+async def parse_result(
+    task_id: str,
+    user: CurrentUser = Depends(get_current_user),
+) -> ApiResponse:
     """
     解析结果查询
 
     入参：
         task_id: 任务 ID（路径参数）
+        user: 当前登录用户（用于任务归属校验）
     出参：
         data: ParseResultResponse（全文/页数/文本块/条款/元数据）
+
+    权限：
+        任务提交人本人，或拥有 task:view_all 的法务/管理员。
+        解析结果含**合同全文原文**，敏感度最高，必须在读取前校验归属。
     """
     from app.services import task_service, orchestration_service
 
@@ -134,6 +171,9 @@ async def parse_result(task_id: str) -> ApiResponse:
         raise BusinessException(
             code=ErrorCode.NOT_FOUND, message=f"任务不存在：{task_id}", http_status=404
         )
+
+    # 【红线】归属校验前置：解析原文属合同敏感数据，不能"先读后拒"
+    assert_task_access(user, task, action="view_parse_result")
 
     # 解析产物读取来源说明：
     #   1) 任务主档的 parse_snapshot（由触发解析时写入，持久化，随时可查）
