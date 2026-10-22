@@ -69,8 +69,8 @@ class Settings(BaseSettings):
         description="服务监听地址。0.0.0.0 表示监听全部网卡，便于内网访问",
     )
     SERVER_PORT: int = Field(
-        default=8000,
-        description="服务监听端口，默认 8000",
+        default=8100,
+        description="服务监听端口，默认 8100（8000 是全机保留位，VMware vmnat.exe 抢占前科，勿用）",
     )
     SERVER_WORKERS: int = Field(
         default=4,

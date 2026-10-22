@@ -23,11 +23,11 @@ import path from 'path';
 
 export default defineConfig(({ mode }) => {
   // 显式加载项目根目录下的 .env / .env.local（'' 表示不过滤前缀，全部读入）。
-  // 说明：本机 8000 端口可能被 VMware NAT 等程序占用，本地试用时通过
-  //       frontend/.env.local 覆盖代理目标，无需改动本文件，
-  //       从而保持仓库默认配置与部署文档一致。
+  // 默认代理目标为 8100 —— 与 backend 的 SERVER_PORT 及 run_local.py 的 BACKEND_PORT 一致。
+  // 8000 是全机保留位（VMware vmnat.exe 抢占前科），不要把默认值改回 8000；
+  // 若部署环境后端换了端口，在 frontend/.env.local 里设 VITE_API_PROXY_TARGET 覆盖即可。
   const env = loadEnv(mode, process.cwd(), '');
-  const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8000';
+  const proxyTarget = env.VITE_API_PROXY_TARGET || 'http://127.0.0.1:8100';
 
   // 开发服务器监听地址（VITE_DEV_HOST）。
   // 默认值 '127.0.0.1' 仅本机可访问——这是仓库的安全默认，不暴露合同原文。
@@ -62,7 +62,7 @@ export default defineConfig(({ mode }) => {
       // 本项仅当 lanMode 为真时注入，避免提交即暴露开发服务器。
       ...(lanMode ? { allowedHosts: true as const } : {}),
       // 接口代理：前端以 /api 开头发起的请求转发到后端，规避浏览器跨域
-      // 目标地址优先取环境变量 VITE_API_PROXY_TARGET，未设置时回退 8000。
+      // 目标地址优先取环境变量 VITE_API_PROXY_TARGET，未设置时回退 8100。
       proxy: {
         '/api': {
           target: proxyTarget,

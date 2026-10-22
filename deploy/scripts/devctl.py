@@ -14,7 +14,7 @@
         │   LLM       127.0.0.1:8001                              │
         ├─────────────────────────────────────────────────────────┤
         │ 应用服务（本脚本负责生命周期）                            │
-        │   backend        127.0.0.1:8000   FastAPI + LangGraph    │
+        │   backend        127.0.0.1:8100   FastAPI + LangGraph    │
         │   frontend       127.0.0.1:5173   Vite Dev Server        │
         │   mock-approval  127.0.0.1:9100   模拟审批系统（演示用）  │
         └─────────────────────────────────────────────────────────┘
@@ -184,7 +184,7 @@ def _backend_cmd() -> List[str]:
         "--host",
         "127.0.0.1",
         "--port",
-        "8000",
+        "8100",
         "--reload",
     ]
 
@@ -226,10 +226,10 @@ APP_SERVICES: Dict[str, Dict[str, Any]] = {
     },
     "backend": {
         "label": "后端服务",
-        "port": 8000,
+        "port": 8100,
         "cwd": BACKEND_DIR,
         "cmd_builder": _backend_cmd,
-        "health_url": "http://127.0.0.1:8000/health",
+        "health_url": "http://127.0.0.1:8100/health",
         "infra": False,
         "start_order": 2,
         "startup_hint": (
@@ -931,7 +931,7 @@ def cmd_status() -> int:
 
     print("\n-- 访问入口" + "-" * 60)
     print("  前端界面    http://127.0.0.1:5173")
-    print("  后端接口    http://127.0.0.1:8000/docs")
+    print("  后端接口    http://127.0.0.1:8100/docs")
     print("  模拟审批    http://127.0.0.1:9100/docs")
 
     print("-" * 74)
@@ -1248,7 +1248,7 @@ def cmd_start(targets: Optional[List[str]], timeout: float, skip_probe: bool) ->
     print("  全部服务已启动。")
     print()
     print("  前端界面    http://127.0.0.1:5173")
-    print("  后端接口    http://127.0.0.1:8000/docs")
+    print("  后端接口    http://127.0.0.1:8100/docs")
     print("  模拟审批    http://127.0.0.1:9100/docs")
     print(f"  日志目录    {LOG_DIR}")
     print()
@@ -1358,7 +1358,7 @@ def _find_pid_by_port(port: int) -> Optional[int]:
                 parts = line.split()
                 if len(parts) < 5:
                     continue
-                # 形如：TCP  127.0.0.1:8000  0.0.0.0:0  LISTENING  12345
+                # 形如：TCP  127.0.0.1:8100  0.0.0.0:0  LISTENING  12345
                 local_addr = parts[1]
                 if local_addr.rsplit(":", 1)[-1] == str(port):
                     try:

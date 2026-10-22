@@ -24,7 +24,8 @@ FastAPI 应用主入口
     - app：模块级应用实例，供 uvicorn 加载（uvicorn app.main:app）
 
 使用示例：
-    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    uvicorn app.main:app --host 0.0.0.0 --port 8100 --reload
+    （8000 是全机保留位，VMware vmnat.exe 抢占前科，勿用；与 .env 的 SERVER_PORT 一致）
 """
 
 import time
