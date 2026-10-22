@@ -84,6 +84,8 @@ async def create_task(request: Any, owner: Optional[str] = None) -> Tuple[str, s
         thread_id=thread_id,
         work_dir=work_dir,
         created_by=owner_ref,
+        # 合同类型：既参与路由决策（见上方 _decide_route_type），也落库供前端筛选展示
+        contract_type=getattr(request, "contract_type", "") or "other",
         # 合同原件引用：审查流程后续需要据此读取原文
         object_key=(getattr(request, "file_object_key", "") or "") or None,
         source_type=(getattr(request, "source_type", "") or "digital"),

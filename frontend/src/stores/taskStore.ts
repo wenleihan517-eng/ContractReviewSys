@@ -186,11 +186,12 @@ function mergeRow(
     applicant: '—',
     submit_dept: '—',
     business_type: '—',
-    contract_type: CONTRACT_TYPE.ALL,
     contract_amount: 0,
     currency: 'CNY',
     counterparty: '—',
     // ---------------- 有后端数据源的字段 ----------------
+    // 合同类型：后端已持久化并回传；历史任务无此键时兜底为 all（前端筛选时归「通用」）
+    contract_type: (detail?.contract_type as string) || CONTRACT_TYPE.ALL,
     status: listItem.status,
     risk_level: detail?.risk_level ?? null,
     progress: listItem.progress ?? detail?.progress ?? 0,

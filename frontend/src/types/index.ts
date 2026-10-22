@@ -106,6 +106,7 @@ export interface TaskDetailResponse {
   contract_id: string;
   contract_title: string;
   contract_no: string;
+  contract_type?: string;
   status: TaskStatus;
   route_type: string;
   progress: number;

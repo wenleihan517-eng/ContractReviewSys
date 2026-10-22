@@ -246,6 +246,12 @@ class ReviewTask(BaseModel):
         default=None,
         description="合同标题（审批单提供或解析后由系统自动识别回填；空表示尚未识别）",
     )
+    # 合同类型（purchase/sales/service/labor/other）：创建任务时提交，既参与差异化路由，
+    # 也落库供前端「合同类型」筛选展示。可选带默认，历史任务（无此键）读出时兜底 other。
+    contract_type: str = Field(
+        default="other",
+        description="合同类型（与前端 constants.CONTRACT_TYPE 对齐：purchase/sales/service/labor/other）",
+    )
     object_key: Optional[str] = Field(
         default=None, description="合同原件在 MinIO 中的对象键（合同桶）"
     )
