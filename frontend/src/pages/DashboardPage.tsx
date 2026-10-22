@@ -22,6 +22,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import '@/styles/dashboard-table.css';
 import {
   Alert,
   App,
@@ -71,6 +72,7 @@ import {
   TASK_STATUS_BADGE,
   TASK_STATUS_IN_PROGRESS,
   TASK_STATUS_OPTIONS,
+  THEME,
   type TaskStatus,
 } from '@/constants';
 import { useAuthStore } from '@/stores/authStore';
@@ -475,13 +477,22 @@ export default function DashboardPage(): React.ReactElement {
           <div>
             <Text
               strong
-              style={{ cursor: 'pointer' }}
+              ellipsis={{ tooltip: row.contract_title }}
+              style={{ cursor: 'pointer', maxWidth: 232, display: 'inline-block' }}
               onClick={() => openTaskDefault(row.task_no)}
             >
               {truncate(row.contract_title, 28)}
             </Text>
           </div>
           <div style={{ fontSize: 12, color: '#8c8c8c' }}>
+            {row.business_type && row.business_type !== '—' && (
+              <Tag
+                color="default"
+                style={{ margin: '0 6px 0 0', fontSize: 11 }}
+              >
+                {BUSINESS_TYPE_LABEL[row.business_type] ?? row.business_type}
+              </Tag>
+            )}
             {row.contract_no || row.task_no}
           </div>
         </div>
@@ -502,20 +513,6 @@ export default function DashboardPage(): React.ReactElement {
           )}
         </div>
       ),
-    },
-    {
-      title: '业务类型',
-      dataIndex: 'business_type',
-      key: 'business_type',
-      width: 110,
-      render: (value: string) => {
-        if (!value || value === '—') return <Text type="secondary">—</Text>;
-        return (
-          <Tag color="default" style={{ margin: 0 }}>
-            {BUSINESS_TYPE_LABEL[value] ?? value}
-          </Tag>
-        );
-      },
     },
     {
       title: '合同金额',
@@ -674,7 +671,7 @@ export default function DashboardPage(): React.ReactElement {
             variant="outlined"
             hoverable
             onClick={() => setQuickFilter('all')}
-            style={STAT_CARD_STYLE}
+            style={STAT_CARD_STYLE(quickFilter === 'all')}
           >
             <Statistic
               title="待审合同总数"
@@ -689,7 +686,7 @@ export default function DashboardPage(): React.ReactElement {
             variant="outlined"
             hoverable
             onClick={() => setQuickFilter('high')}
-            style={STAT_CARD_STYLE}
+            style={STAT_CARD_STYLE(quickFilter === 'high')}
           >
             <Statistic
               title="严重 / 高风险"
@@ -708,7 +705,7 @@ export default function DashboardPage(): React.ReactElement {
             variant="outlined"
             hoverable
             onClick={() => setQuickFilter('blocked')}
-            style={STAT_CARD_STYLE}
+            style={STAT_CARD_STYLE(quickFilter === 'blocked')}
           >
             <Statistic
               title="阻塞待处理"
@@ -726,7 +723,7 @@ export default function DashboardPage(): React.ReactElement {
             variant="outlined"
             hoverable
             onClick={() => setQuickFilter('failed')}
-            style={STAT_CARD_STYLE}
+            style={STAT_CARD_STYLE(quickFilter === 'failed')}
           >
             <Statistic
               title="执行失败"
@@ -744,7 +741,7 @@ export default function DashboardPage(): React.ReactElement {
             variant="outlined"
             hoverable
             onClick={() => setQuickFilter('completed')}
-            style={STAT_CARD_STYLE}
+            style={STAT_CARD_STYLE(quickFilter === 'completed')}
           >
             <Statistic
               title="审查已完成"
@@ -774,6 +771,11 @@ export default function DashboardPage(): React.ReactElement {
 
       {/* ================= 筛选与操作区 ================= */}
       <Card size="small" style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 10 }}>
+          <Text strong style={{ fontSize: 13 }}>
+            明细筛选
+          </Text>
+        </div>
         <Space
           wrap
           size={12}
@@ -869,16 +871,27 @@ export default function DashboardPage(): React.ReactElement {
           </Space>
         </Space>
 
-        {/* ---------------- 快捷筛选 ---------------- */}
-        <div style={{ marginTop: 12 }}>
-          <Segmented
-            value={quickFilter}
-            onChange={(value) => setQuickFilter(value as QuickFilter)}
-            options={QUICK_FILTERS.map((item) => ({
-              label: item.label,
-              value: item.value,
-            }))}
-          />
+        {/* ---------------- 快捷筛选（与上方明细筛选叠加生效） ---------------- */}
+        <div
+          style={{
+            marginTop: 12,
+            paddingTop: 12,
+            borderTop: `1px solid ${THEME.BORDER_SECONDARY}`,
+          }}
+        >
+          <Space size={8} wrap>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              快捷筛选
+            </Text>
+            <Segmented
+              value={quickFilter}
+              onChange={(value) => setQuickFilter(value as QuickFilter)}
+              options={QUICK_FILTERS.map((item) => ({
+                label: item.label,
+                value: item.value,
+              }))}
+            />
+          </Space>
           {quickFilter !== 'all' && (
             <Text type="secondary" style={{ marginLeft: 12, fontSize: 12 }}>
               已按快捷条件过滤，当前展示 {displayedRows.length} 条
@@ -1020,10 +1033,13 @@ export default function DashboardPage(): React.ReactElement {
           <>
           <Table<DashboardRow>
           rowKey="task_no"
+          rowClassName={(row) =>
+            row.risk_level === 'critical' ? 'row-risk-critical' : ''
+          }
           columns={columns}
           dataSource={displayedRows}
           loading={loading}
-          scroll={{ x: 1500 }}
+          scroll={{ x: 1260 }}
           size="middle"
           locale={{
             emptyText: (
@@ -1126,7 +1142,13 @@ export default function DashboardPage(): React.ReactElement {
   );
 }
 
-/** 统计卡样式：可点击切入对应筛选维度 */
-const STAT_CARD_STYLE: React.CSSProperties = {
-  cursor: 'pointer',
-};
+/** 统计卡样式：可点击切入对应筛选维度，激活态用主色描边 + 浅蓝底 */
+const STAT_CARD_STYLE = (active: boolean): React.CSSProperties =>
+  active
+    ? {
+        cursor: 'pointer',
+        borderColor: '#1677ff',
+        background: '#e6f4ff',
+        boxShadow: '0 0 0 2px rgba(22,119,255,0.15)',
+      }
+    : { cursor: 'pointer' };

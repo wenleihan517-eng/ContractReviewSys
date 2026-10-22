@@ -354,6 +354,21 @@ export const PAGINATION = {
 /** 长任务进度轮询间隔（毫秒） */
 export const POLL_INTERVAL_MS = 3000;
 
+/** 工作台双栏面板相对视口顶部的偏移量（px），用于推算双栏固定高度。
+ *  说明：把原散落在 WorkbenchPage 的魔法数字 420 收敛到此处统一管理，
+ *  调整顶栏/任务卡高度时只需改这里。 */
+export const WORKBENCH_PANEL_OFFSET_PX = 420;
+
+/** 语义化主题令牌：集中管理组件内高频硬编码的表面/描边/警示色，避免散落各处 */
+export const THEME = {
+  SURFACE_SECONDARY: '#fafafa',
+  BORDER_SECONDARY: '#f0f0f0',
+  WARNING_SURFACE: '#fff7e6',
+  WARNING_BORDER: '#ffe7ba',
+  TEXT_PRIMARY: '#262626',
+  TEXT_SECONDARY: '#8c8c8c',
+} as const;
+
 /** 文件上传大小上限（字节），与后端配置保持一致 */
 export const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
 

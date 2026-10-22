@@ -35,6 +35,9 @@ import {
 } from '@/constants';
 import type { DashboardRow, TaskDetailResponse } from '@/types';
 
+// 任务详情缓存：轮询时复用，避免每个轮询周期对已完成任务重复打详情接口（N+1 节流，见 #13）
+const detailCache = new Map<string, TaskDetailResponse>();
+
 // ======================================================================
 // 一、筛选条件模型
 // ======================================================================
@@ -103,7 +106,7 @@ interface TaskState {
   /** 切换分页 */
   setPage: (page: number, pageSize: number) => void;
   /** 加载任务列表（含详情聚合） */
-  loadTasks: (options?: { silent?: boolean }) => Promise<void>;
+  loadTasks: (options?: { silent?: boolean; polling?: boolean }) => Promise<void>;
   /** 勾选/取消勾选单个任务 */
   toggleSelect: (taskNo: string) => void;
   /** 全选/取消全选当前页 */
@@ -325,13 +328,27 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       // ---------------- 第二步：并发拉取详情补齐字段 ----------------
       // 说明：用 allSettled 而非 all，单个详情失败不应导致整页数据丢失。
       const detailResults = await Promise.allSettled(
-        listResult.items.map((item) => taskApi.detail(item.task_no)),
+        listResult.items.map((item) => {
+          const cached = detailCache.get(item.task_no);
+          // 轮询场景节流：已缓存且风险等级已定、且当前非进行中的任务，
+          // 直接复用缓存详情，避免每个轮询周期对已完成任务重复打详情接口（N+1）。
+          if (
+            options?.polling &&
+            cached &&
+            cached.risk_level != null &&
+            !TASK_STATUS_IN_PROGRESS.includes(item.status)
+          ) {
+            return Promise.resolve(cached);
+          }
+          return taskApi.detail(item.task_no);
+        }),
       );
 
       const mergedRows = listResult.items.map((item, index) => {
         const settled = detailResults[index];
         const detail =
           settled.status === 'fulfilled' ? settled.value : null;
+        if (detail) detailCache.set(item.task_no, detail);
         return mergeRow(item, detail);
       });
 
@@ -478,7 +495,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     if (existing) return; // 已在轮询，避免重复注册定时器
 
     const timer = setInterval(() => {
-      void get().loadTasks({ silent: true });
+      void get().loadTasks({ silent: true, polling: true });
     }, POLL_INTERVAL_MS);
 
     set({ pollTimer: timer });

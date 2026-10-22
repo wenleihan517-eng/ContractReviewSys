@@ -70,6 +70,7 @@ import {
   TASK_STATUS_IN_PROGRESS,
   WRITE_BACK_STATUS_COLOR,
   WRITE_BACK_STATUS_LABEL,
+  WORKBENCH_PANEL_OFFSET_PX,
   type RiskLevel,
 } from '@/constants';
 import {
@@ -549,7 +550,7 @@ export default function WorkbenchPage(): React.ReactElement {
         )}
       </Card>
 
-      {/* ================= 错误与阻塞提示 ================= */}
+      {/* ================= 错误提示 ================= */}
       {error && (
         <Alert
           type="error"
@@ -565,28 +566,6 @@ export default function WorkbenchPage(): React.ReactElement {
         />
       )}
 
-      {isBlocked && (
-        <Alert
-          type="warning"
-          showIcon
-          message={`审查流程已阻塞：${taskDetail?.blocked_reason ?? '未知原因'}`}
-          description={
-            <div style={{ fontSize: 12, lineHeight: 1.7 }}>
-              <div>{taskDetail?.blocked_detail || '请检查源文档后重跑任务。'}</div>
-              <div style={{ color: '#8c8c8c', marginTop: 4 }}>
-                阻塞任务不产出审查结论，不会进入审批回写环节。
-                已重试 {taskDetail?.retry_count ?? 0} / {taskDetail?.max_retry ?? 3} 次。
-              </div>
-            </div>
-          }
-          action={
-            <Button size="small" type="primary" onClick={handleRetryBlocked}>
-              重跑
-            </Button>
-          }
-        />
-      )}
-
       {/* ================= 双栏主体 ================= */}
       <Spin spinning={loading && !taskDetail} tip="正在加载合同与审查结果…">
         <div
@@ -598,8 +577,8 @@ export default function WorkbenchPage(): React.ReactElement {
             // 说明：桌面端固定双栏高度并各自内部滚动，
             // 使左右栏可以独立浏览而不互相牵动整页滚动条。
             // 手机端改为 auto，让两栏自然纵向排列、由页面整体滚动。
-            height: isMobile ? 'auto' : 'calc(100vh - 420px)',
-            minHeight: isMobile ? 'unset' : 420,
+            height: isMobile ? 'auto' : `calc(100vh - ${WORKBENCH_PANEL_OFFSET_PX}px)`,
+            minHeight: isMobile ? 'unset' : WORKBENCH_PANEL_OFFSET_PX,
           }}
         >
           {/* ---------------- 左栏：文档视窗 ---------------- */}

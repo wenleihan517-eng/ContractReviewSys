@@ -56,12 +56,16 @@ import {
   ReloadOutlined,
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { Components } from 'react-markdown';
 
 import {
   RISK_LEVEL_COLOR,
   RISK_LEVEL_DESCRIPTION,
   RISK_LEVEL_LABEL,
   RISK_LEVEL_TAG_COLOR,
+  THEME,
   WRITE_BACK_STATUS_COLOR,
   WRITE_BACK_STATUS_LABEL,
   type RiskLevel,
@@ -78,6 +82,33 @@ import type {
 
 const { Text, Paragraph, Title } = Typography;
 const { TextArea } = Input;
+
+/**
+ * 报告 Markdown 渲染的组件映射：用 antd 排版组件承载标题/段落/列表，
+ * 不依赖全局样式覆盖（遵循 UX_UI §6.3），表格等由 remark-gfm 渲染。
+ */
+const markdownComponents: Components = {
+  h1: (props) => {
+    const { node: _node, ...rest } = props;
+    return <Title level={3} style={{ marginTop: 8, marginBottom: 8 }} {...rest} />;
+  },
+  h2: (props) => {
+    const { node: _node, ...rest } = props;
+    return <Title level={4} style={{ marginTop: 12, marginBottom: 6 }} {...rest} />;
+  },
+  h3: (props) => {
+    const { node: _node, ...rest } = props;
+    return <Title level={5} style={{ marginTop: 10, marginBottom: 4 }} {...rest} />;
+  },
+  p: (props) => {
+    const { node: _node, ...rest } = props;
+    return <Paragraph style={{ fontSize: 13, lineHeight: 1.9, marginBottom: 8 }} {...rest} />;
+  },
+  li: (props) => {
+    const { node: _node, ...rest } = props;
+    return <li style={{ fontSize: 13, lineHeight: 1.9 }} {...rest} />;
+  },
+};
 
 interface ReviewFooterPanelProps {
   /** 任务详情 */
@@ -252,9 +283,9 @@ export default function ReviewFooterPanel({
             <div
               style={{
                 padding: '10px 12px',
-                background: '#fafafa',
+                background: THEME.SURFACE_SECONDARY,
                 borderRadius: 6,
-                border: '1px solid #f0f0f0',
+                border: `1px solid ${THEME.BORDER_SECONDARY}`,
                 height: '100%',
               }}
             >
@@ -292,9 +323,9 @@ export default function ReviewFooterPanel({
             <div
               style={{
                 padding: '10px 12px',
-                background: '#fafafa',
+                background: THEME.SURFACE_SECONDARY,
                 borderRadius: 6,
-                border: '1px solid #f0f0f0',
+                border: `1px solid ${THEME.BORDER_SECONDARY}`,
                 height: '100%',
               }}
             >
@@ -319,9 +350,9 @@ export default function ReviewFooterPanel({
               <div
                 style={{
                   padding: '10px 12px',
-                  background: '#fafafa',
+                  background: THEME.SURFACE_SECONDARY,
                   borderRadius: 6,
-                  border: '1px solid #f0f0f0',
+                  border: `1px solid ${THEME.BORDER_SECONDARY}`,
                   height: '100%',
                 }}
               >
@@ -354,9 +385,9 @@ export default function ReviewFooterPanel({
           <div
             style={{
               padding: '10px 12px',
-              background: '#fff7e6',
+              background: THEME.WARNING_SURFACE,
               borderRadius: 6,
-              border: '1px solid #ffe7ba',
+              border: `1px solid ${THEME.WARNING_BORDER}`,
             }}
           >
             <Space size={6} style={{ marginBottom: 6 }}>
@@ -592,8 +623,8 @@ export default function ReviewFooterPanel({
               style={{
                 marginTop: 6,
                 padding: 12,
-                background: '#fafafa',
-                border: '1px solid #f0f0f0',
+                background: THEME.SURFACE_SECONDARY,
+                border: `1px solid ${THEME.BORDER_SECONDARY}`,
                 borderRadius: 4,
                 fontSize: 12,
                 lineHeight: 1.9,
@@ -677,12 +708,13 @@ export default function ReviewFooterPanel({
             style={{
               fontSize: 13,
               lineHeight: 1.9,
-              whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
-              color: '#262626',
+              color: THEME.TEXT_PRIMARY,
             }}
           >
-            {reportContent}
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+              {reportContent}
+            </ReactMarkdown>
           </div>
         ) : (
           <div style={{ textAlign: 'center', paddingTop: 60 }}>

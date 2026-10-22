@@ -33,12 +33,9 @@ frontend/.vite/
 .pnpm-store/
 
 # ------------------------- 运行时数据与日志 -------------------------
-storage/logs/
-storage/tmp/
-storage/minio_data/
-storage/milvus_data/
-storage/mongo_data/
-storage/etcd_data/
+# 整个 storage/ 目录均为运行时产物与敏感数据（含合同备份、数据库文件、日志），
+# 一律不入库。若有确需跟踪的静态资产，请放到项目其它目录并单独加例外。
+storage/
 *.log
 
 # devctl.py 的进程 PID 与后台服务日志（本机运行态，不应入库）

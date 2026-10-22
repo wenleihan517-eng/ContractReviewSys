@@ -48,14 +48,27 @@ export default function NotificationCenter(): React.ReactElement {
   };
 
   // 挂载时加载 + 每 30 秒轮询未读（轻量感知，不轰炸）
+  // 标签页切到后台时暂停轮询，切回前台立即刷新一次，避免无谓请求与陈旧计数
   useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => {
+      if (document.hidden) return;
       void notificationApi.unreadCount().then((r) => {
         setUnread(r.unread_count ?? 0);
       }).catch(() => undefined);
     }, 30000);
-    return () => window.clearInterval(timer);
+    const handleVisibility = (): void => {
+      if (!document.hidden) {
+        void notificationApi.unreadCount().then((r) => {
+          setUnread(r.unread_count ?? 0);
+        }).catch(() => undefined);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, []);
 
   /** 打开面板时刷新完整列表 */

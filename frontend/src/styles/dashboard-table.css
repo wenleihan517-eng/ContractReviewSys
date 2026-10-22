@@ -1,0 +1,12 @@
+/* D:/ContractReviewSys-合同审批智能审查项目/frontend/src/styles/dashboard-table.css
+ * 合同审查大盘表格：critical（严重）风险行视觉强调。
+ * 仅做展示层的视觉加重，不影响任何数据与后端交互。
+ *
+ * 【遵循 UX_UI §6.3】
+ *   不使用全局样式表覆盖组件库默认样式、不使用 !important。
+ *   因此这里只用「左侧 3px 红条」（box-shadow inset）强调，
+ *   该阴影不会被 antd 行 hover 的背景色覆盖，无需 !important 也能稳定显示。
+ */
+.row-risk-critical > td:first-child {
+  box-shadow: inset 3px 0 0 #cf1322;
+}
